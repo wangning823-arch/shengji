@@ -85,16 +85,36 @@ function getRoomState(roomId) {
     id: room.id,
     deckCount: room.deckCount,
     status: room.status,
-    players: room.players.map(p => ({
+    players: room.players.map(p => p ? {
       seat: p.seat,
       userId: p.userId,
       nickname: p.nickname,
       avatar: p.avatar,
       ready: p.ready,
+      isAI: p.isAI || false,
       team: p.seat % 2 === 0 ? 1 : 2
-    })),
+    } : null),
     gameId: room.gameId
   };
+}
+
+function getRoomList() {
+  const roomList = [];
+  for (const [id, room] of rooms) {
+    if (room.status === 'waiting') {
+      const humanPlayers = room.players.filter(p => p && !p.isAI);
+      const aiPlayers = room.players.filter(p => p && p.isAI);
+      roomList.push({
+        id: room.id,
+        deckCount: room.deckCount,
+        playerCount: humanPlayers.length,
+        aiCount: aiPlayers.length,
+        totalPlayers: room.players.filter(p => p !== null).length,
+        host: room.players.find(p => p !== null)?.nickname || '--'
+      });
+    }
+  }
+  return roomList;
 }
 
 const server = http.createServer((req, res) => {
@@ -108,11 +128,36 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (req.url === '/api/login/guest') {
+  if (req.url === '/api/login/guest' && req.method === 'GET') {
     const guestId = Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
     const user = db.getOrCreateUser('guest_' + guestId, null, '游客' + guestId.slice(-4), null);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ token: guestId, user: { id: user.id, nickname: user.nickname, avatar: user.avatar } }));
+    return;
+  }
+
+  if (req.url === '/api/login/guest' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const { nickname } = JSON.parse(body);
+        const guestId = Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
+        const displayName = (nickname && nickname.trim()) ? nickname.trim().slice(0, 12) : '游客' + guestId.slice(-4);
+        const user = db.getOrCreateUser('guest_' + guestId, null, displayName, null);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ token: guestId, user: { id: user.id, nickname: user.nickname, avatar: user.avatar } }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request' }));
+      }
+    });
+    return;
+  }
+
+  if (req.url === '/api/rooms') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ rooms: getRoomList() }));
     return;
   }
 
@@ -147,7 +192,7 @@ wss.on('connection', (ws) => {
     if (ws.roomId && rooms.has(ws.roomId)) {
       const room = rooms.get(ws.roomId);
       room.clients.delete(ws);
-      const player = room.players.find(p => p.ws === ws);
+      const player = room.players.find(p => p && p.ws === ws);
       if (player) {
         player.online = false;
         broadcast(ws.roomId, { type: 'player_left', seat: player.seat, nickname: player.nickname });
@@ -164,14 +209,12 @@ async function handleAITurn(roomId, game, seat) {
   const aiPlayer = roomAIs[seat];
   if (!aiPlayer) return;
 
-  // 延迟一点，让游戏更自然
   await new Promise(r => setTimeout(r, 800 + Math.random() * 700));
 
   try {
     const gameState = game.toJSON(seat);
 
     if (game.status === 'bidding') {
-      // 亮主阶段
       const bidCards = await aiPlayer.decideBid(gameState);
       if (bidCards) {
         const result = game.bid(seat, bidCards);
@@ -188,7 +231,6 @@ async function handleAITurn(roomId, game, seat) {
           });
         }
       }
-      // 自动确认主牌（简化）
       if (game.status === 'bidding' && game.currentSeat === seat) {
         await new Promise(r => setTimeout(r, 500));
         const confirmResult = game.confirmTrump();
@@ -209,7 +251,6 @@ async function handleAITurn(roomId, game, seat) {
         });
       }
     } else if (game.status === 'playing' && game.currentSeat === seat) {
-      // 出牌阶段
       const leadCards = game.currentTrick.length > 0 ? game.currentTrick[0].cards : null;
       const playCards = await aiPlayer.decidePlay(gameState, leadCards);
       const cardIds = playCards.map(c => c.id);
@@ -262,7 +303,6 @@ async function handleAITurn(roomId, game, seat) {
           state: game.toJSON()
         });
 
-        // 下一个如果是AI，继续处理
         if (result.nextSeat !== undefined && result.nextSeat !== seat) {
           setTimeout(() => {
             const roomAIs = roomAIPlayers.get(roomId) || {};
@@ -281,6 +321,13 @@ async function handleAITurn(roomId, game, seat) {
   }
 }
 
+function findFirstEmptySeat(room) {
+  for (let i = 0; i < 4; i++) {
+    if (!room.players[i]) return i;
+  }
+  return -1;
+}
+
 const messageHandlers = {
   auth(ws, msg) {
     const { userId, nickname, avatar } = msg;
@@ -291,13 +338,17 @@ const messageHandlers = {
     send(ws, { type: 'auth_ok' });
   },
 
+  get_rooms(ws, msg) {
+    send(ws, { type: 'room_list', rooms: getRoomList() });
+  },
+
   create_room(ws, msg) {
     const roomId = generateRoomId();
     const room = {
       id: roomId,
       deckCount: msg.deckCount || 2,
       status: 'waiting',
-      players: [],
+      players: [null, null, null, null],
       clients: new Set(),
       gameId: null
     };
@@ -306,49 +357,103 @@ const messageHandlers = {
   },
 
   join_room(ws, msg) {
-    const { roomId } = msg;
+    const { roomId, seat: requestedSeat } = msg;
     const room = rooms.get(roomId);
     if (!room) {
       send(ws, { type: 'error', message: '房间不存在' });
       return;
     }
+    if (room.status !== 'waiting') {
+      send(ws, { type: 'error', message: '游戏已开始，无法加入' });
+      return;
+    }
 
-    let player = room.players.find(p => p.userId === ws.userId);
-    if (!player) {
-      if (room.players.length >= 4) {
-        send(ws, { type: 'error', message: '房间已满' });
-        return;
-      }
-      const seat = room.players.length;
-      player = {
-        seat,
-        userId: ws.userId,
-        nickname: ws.nickname,
-        avatar: ws.avatar,
-        ready: false,
-        ws,
-        online: true
-      };
-      room.players.push(player);
-    } else {
+    // 已在房间中的玩家重连
+    let player = room.players.find(p => p && p.userId === ws.userId);
+    if (player) {
       player.ws = ws;
       player.online = true;
       player.nickname = ws.nickname;
       player.avatar = ws.avatar;
+      ws.roomId = roomId;
+      ws.seat = player.seat;
+      room.clients.add(ws);
+      send(ws, { type: 'joined', seat: player.seat });
+      broadcast(roomId, { type: 'room_state', state: getRoomState(roomId) });
+      if (room.gameId && games.has(room.gameId)) {
+        const game = games.get(room.gameId);
+        send(ws, { type: 'game_state', state: game.toJSON(player.seat) });
+      }
+      return;
     }
 
+    // 选择座位
+    let seat;
+    if (requestedSeat !== undefined && requestedSeat >= 0 && requestedSeat < 4) {
+      if (room.players[requestedSeat]) {
+        send(ws, { type: 'error', message: '该座位已被占用' });
+        return;
+      }
+      seat = requestedSeat;
+    } else {
+      seat = findFirstEmptySeat(room);
+      if (seat === -1) {
+        send(ws, { type: 'error', message: '房间已满' });
+        return;
+      }
+    }
+
+    player = {
+      seat,
+      userId: ws.userId,
+      nickname: ws.nickname,
+      avatar: ws.avatar,
+      ready: false,
+      ws,
+      online: true
+    };
+    room.players[seat] = player;
+
     ws.roomId = roomId;
-    ws.seat = player.seat;
+    ws.seat = seat;
     room.clients.add(ws);
 
-    send(ws, { type: 'joined', seat: player.seat });
-    broadcast(roomId, { type: 'player_joined', seat: player.seat, nickname: player.nickname, avatar: player.avatar });
+    send(ws, { type: 'joined', seat });
+    broadcast(roomId, { type: 'player_joined', seat, nickname: player.nickname, avatar: player.avatar });
     broadcast(roomId, { type: 'room_state', state: getRoomState(roomId) });
 
     if (room.gameId && games.has(room.gameId)) {
       const game = games.get(room.gameId);
-      send(ws, { type: 'game_state', state: game.toJSON(player.seat) });
+      send(ws, { type: 'game_state', state: game.toJSON(seat) });
     }
+  },
+
+  sit_seat(ws, msg) {
+    if (!ws.roomId) return;
+    const room = rooms.get(ws.roomId);
+    if (!room || room.status !== 'waiting') return;
+
+    const targetSeat = msg.seat;
+    if (targetSeat < 0 || targetSeat > 3) return;
+
+    // 检查目标座位是否为空
+    if (room.players[targetSeat]) {
+      send(ws, { type: 'error', message: '该座位已被占用' });
+      return;
+    }
+
+    // 找到自己当前座位
+    const currentSeat = room.players.findIndex(p => p && p.ws === ws);
+    if (currentSeat === -1) return;
+
+    // 移动到新座位
+    const player = room.players[currentSeat];
+    room.players[currentSeat] = null;
+    player.seat = targetSeat;
+    room.players[targetSeat] = player;
+    ws.seat = targetSeat;
+
+    broadcast(ws.roomId, { type: 'room_state', state: getRoomState(ws.roomId) });
   },
 
   leave_room(ws, msg) {
@@ -357,12 +462,11 @@ const messageHandlers = {
     if (!room) return;
 
     room.clients.delete(ws);
-    const idx = room.players.findIndex(p => p.ws === ws);
+    const idx = room.players.findIndex(p => p && p.ws === ws);
     if (idx >= 0) {
       const player = room.players[idx];
       broadcast(ws.roomId, { type: 'player_left', seat: player.seat, nickname: player.nickname });
-      room.players.splice(idx, 1);
-      room.players.forEach((p, i) => p.seat = i);
+      room.players[idx] = null;
     }
 
     ws.roomId = null;
@@ -381,16 +485,18 @@ const messageHandlers = {
       send(ws, { type: 'error', message: '房间不存在' });
       return;
     }
-    if (room.players.length >= 4) {
-      send(ws, { type: 'error', message: '房间已满' });
+
+    const seat = msg.seat !== undefined ? msg.seat : findFirstEmptySeat(room);
+    if (seat === -1 || room.players[seat]) {
+      send(ws, { type: 'error', message: '没有空座位' });
       return;
     }
 
-    const seat = room.players.length;
+    const aiCount = room.players.filter(p => p && p.isAI).length;
     const aiPlayerInfo = {
       seat,
       userId: `ai_${Date.now()}`,
-      nickname: `AI玩家${seat + 1}`,
+      nickname: `AI玩家${aiCount + 1}`,
       avatar: '🤖',
       ready: true,
       isAI: true,
@@ -398,11 +504,10 @@ const messageHandlers = {
       online: true
     };
 
-    room.players.push(aiPlayerInfo);
+    room.players[seat] = aiPlayerInfo;
 
     console.log('Adding AI player to seat', seat);
 
-    // 初始化AI玩家
     if (!roomAIPlayers.has(ws.roomId)) {
       roomAIPlayers.set(ws.roomId, {});
     }
@@ -418,7 +523,7 @@ const messageHandlers = {
     const room = rooms.get(ws.roomId);
     if (!room) return;
 
-    const player = room.players.find(p => p.seat === ws.seat);
+    const player = room.players.find(p => p && p.ws === ws);
     if (player) {
       player.ready = msg.ready;
       broadcast(ws.roomId, { type: 'player_ready', seat: ws.seat, ready: msg.ready });
@@ -429,7 +534,10 @@ const messageHandlers = {
   start_game(ws, msg) {
     if (!ws.roomId) return;
     const room = rooms.get(ws.roomId);
-    if (!room || room.players.length !== 4) {
+    if (!room) return;
+
+    const activePlayers = room.players.filter(p => p !== null);
+    if (activePlayers.length !== 4) {
       send(ws, { type: 'error', message: '需要4人才能开始' });
       return;
     }
@@ -437,12 +545,12 @@ const messageHandlers = {
       send(ws, { type: 'error', message: '游戏已开始' });
       return;
     }
-    if (!room.players.every(p => p.ready)) {
+    if (!activePlayers.every(p => p.ready)) {
       send(ws, { type: 'error', message: '有人未准备' });
       return;
     }
 
-    const game = new GameEngine(room.id, room.deckCount, room.players.map(p => ({
+    const game = new GameEngine(room.id, room.deckCount, activePlayers.map(p => ({
       userId: p.userId,
       nickname: p.nickname,
       avatar: p.avatar
@@ -453,7 +561,6 @@ const messageHandlers = {
     room.gameId = game.id;
     room.status = 'playing';
 
-    // 设置AI玩家的手牌
     const roomAIs = roomAIPlayers.get(ws.roomId) || {};
     for (let seat = 0; seat < 4; seat++) {
       if (roomAIs[seat]) {
@@ -461,8 +568,7 @@ const messageHandlers = {
       }
     }
 
-    // 给真人玩家发消息
-    for (const player of room.players) {
+    for (const player of activePlayers) {
       const gameState = game.toJSON(player.seat);
       const hand = game.players[player.seat].hand;
       if (player.ws) {
@@ -484,7 +590,6 @@ const messageHandlers = {
       phase: 'bidding'
     });
 
-    // 如果是AI先手，触发AI回合
     if (roomAIs[game.currentSeat]) {
       setTimeout(() => {
         handleAITurn(ws.roomId, game, game.currentSeat);
@@ -511,6 +616,13 @@ const messageHandlers = {
         type: 'game_state',
         state: game.toJSON()
       });
+
+      const roomAIs = roomAIPlayers.get(ws.roomId) || {};
+      if (game.status === 'bidding' && roomAIs[game.currentSeat]) {
+        setTimeout(() => {
+          handleAITurn(ws.roomId, game, game.currentSeat);
+        }, 200);
+      }
     } else {
       send(ws, { type: 'error', message: result.reason });
     }
@@ -539,6 +651,13 @@ const messageHandlers = {
       type: 'game_state',
       state: game.toJSON()
     });
+
+    const roomAIs = roomAIPlayers.get(ws.roomId) || {};
+    if (roomAIs[game.currentSeat]) {
+      setTimeout(() => {
+        handleAITurn(ws.roomId, game, game.currentSeat);
+      }, 200);
+    }
   },
 
   play(ws, msg) {
@@ -597,6 +716,16 @@ const messageHandlers = {
         type: 'game_state',
         state: game.toJSON()
       });
+
+      const roomAIs = roomAIPlayers.get(ws.roomId) || {};
+      if (!result.gameEnded && roomAIs[result.nextSeat]) {
+        setTimeout(() => {
+          const currentGame = games.get(room.gameId);
+          if (currentGame) {
+            handleAITurn(ws.roomId, currentGame, result.nextSeat);
+          }
+        }, 200);
+      }
     } else {
       send(ws, { type: 'error', message: result.reason });
     }
