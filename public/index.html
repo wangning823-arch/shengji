@@ -14,9 +14,12 @@
       <div class="login-box">
         <h1>打升级</h1>
         <p class="subtitle">4人联机拖拉机 / 80分</p>
-        <div class="login-buttons">
-          <button id="btn-guest" class="btn primary">游客登录</button>
-          <button id="btn-wechat" class="btn wechat">微信登录</button>
+        <div class="login-form">
+          <input id="nickname-input" type="text" placeholder="输入昵称（选填）" maxlength="12">
+          <div class="login-buttons">
+            <button id="btn-guest" class="btn primary">游客登录</button>
+            <button id="btn-wechat" class="btn wechat">微信登录</button>
+          </div>
         </div>
         <p class="tip">推荐横屏游玩，体验更佳</p>
       </div>
@@ -26,7 +29,7 @@
     <div id="lobby-screen" class="screen">
       <div class="lobby-header">
         <div class="user-info">
-          <img id="user-avatar" src="" alt="">
+          <div id="user-avatar" class="avatar-placeholder"></div>
           <span id="user-nickname">游客</span>
         </div>
         <h2>游戏大厅</h2>
@@ -51,6 +54,12 @@
           <button id="btn-confirm-create" class="btn primary">创建</button>
         </div>
       </div>
+      <div class="room-list-section">
+        <h3>当前房间</h3>
+        <div id="room-list" class="room-list">
+          <p class="empty-hint">暂无等待中的房间</p>
+        </div>
+      </div>
     </div>
 
     <!-- 房间 -->
@@ -61,28 +70,36 @@
       </div>
       <div class="seats">
         <div class="seat" data-seat="0">
+          <div class="seat-index">0</div>
           <div class="seat-avatar"></div>
-          <div class="seat-name">等待中</div>
+          <div class="seat-name">空闲</div>
           <div class="seat-status"></div>
+          <button class="btn small seat-action hidden" data-action="sit">坐下</button>
         </div>
         <div class="seat" data-seat="1">
+          <div class="seat-index">1</div>
           <div class="seat-avatar"></div>
-          <div class="seat-name">等待中</div>
+          <div class="seat-name">空闲</div>
           <div class="seat-status"></div>
+          <button class="btn small seat-action hidden" data-action="sit">坐下</button>
         </div>
         <div class="seat" data-seat="2">
+          <div class="seat-index">2</div>
           <div class="seat-avatar"></div>
-          <div class="seat-name">等待中</div>
+          <div class="seat-name">空闲</div>
           <div class="seat-status"></div>
+          <button class="btn small seat-action hidden" data-action="sit">坐下</button>
         </div>
         <div class="seat" data-seat="3">
+          <div class="seat-index">3</div>
           <div class="seat-avatar"></div>
-          <div class="seat-name">等待中</div>
+          <div class="seat-name">空闲</div>
           <div class="seat-status"></div>
+          <button class="btn small seat-action hidden" data-action="sit">坐下</button>
         </div>
       </div>
       <div class="room-actions">
-        <button id="btn-ready" class="btn primary">准备</button>
+        <button id="btn-ready" class="btn primary hidden">准备</button>
         <button id="btn-add-ai" class="btn">添加AI玩家</button>
         <button id="btn-start" class="btn primary hidden">开始游戏</button>
       </div>

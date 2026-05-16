@@ -7,13 +7,17 @@ const App = {
   selectedCards: new Set(),
   myHand: [],
   isReady: false,
+  isSitting: false,
   chatOpen: false,
   reconnectTimer: null,
+  roomListRefreshTimer: null,
 
   SUIT_SYMBOLS: { spade: '♠', heart: '♥', diamond: '♦', club: '♣', joker: '🃏' },
   SUIT_NAMES: { spade: '黑桃', heart: '红桃', diamond: '方块', club: '梅花' },
   RANK_ORDER: ['3','4','5','6','7','8','9','10','J','Q','K','A','2'],
   localCurrentTrick: [],
+
+  SEAT_LABELS: ['北', '东', '南', '西'],
 
   init() {
     this.bindEvents();
@@ -63,6 +67,11 @@ const App = {
     document.getElementById('btn-guest').onclick = () => this.loginGuest();
     document.getElementById('btn-wechat').onclick = () => alert('微信登录需要配置AppID');
 
+    // 昵称输入回车登录
+    document.getElementById('nickname-input').onkeydown = (e) => {
+      if (e.key === 'Enter') this.loginGuest();
+    };
+
     document.getElementById('btn-create-room').onclick = () => {
       document.getElementById('room-config-panel').classList.remove('hidden');
     };
@@ -80,17 +89,33 @@ const App = {
       if (code) this.joinRoom(code);
     };
 
-    document.getElementById('btn-leave-room').onclick = () => this.send({ type: 'leave_room' });
+    document.getElementById('btn-leave-room').onclick = () => {
+      this.send({ type: 'leave_room' });
+      this.isSitting = false;
+      this.isReady = false;
+      this.seat = -1;
+      this.startRoomListRefresh();
+    };
+
     document.getElementById('btn-ready').onclick = () => {
       this.isReady = !this.isReady;
       this.send({ type: 'ready', ready: this.isReady });
       document.getElementById('btn-ready').textContent = this.isReady ? '取消准备' : '准备';
     };
+
     document.getElementById('btn-add-ai').onclick = () => {
-      console.log('Add AI button clicked');
       this.send({ type: 'add_ai' });
     };
+
     document.getElementById('btn-start').onclick = () => this.send({ type: 'start_game' });
+
+    // 座位点击事件
+    document.querySelectorAll('.seat').forEach(el => {
+      el.onclick = () => {
+        const seatNum = parseInt(el.dataset.seat);
+        this.onSeatClick(seatNum);
+      };
+    });
 
     document.getElementById('btn-play').onclick = () => this.playCards();
     document.getElementById('btn-bid').onclick = () => this.bid();
@@ -110,21 +135,99 @@ const App = {
   },
 
   async loginGuest() {
+    const nicknameInput = document.getElementById('nickname-input');
+    const nickname = nicknameInput.value.trim();
+
     try {
-      const res = await fetch('/api/login/guest');
+      const res = await fetch('/api/login/guest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: nickname || '' })
+      });
       const data = await res.json();
       this.user = data.user;
       localStorage.setItem('shengji_user', JSON.stringify(this.user));
       this.send({ type: 'auth', userId: this.user.id, nickname: this.user.nickname, avatar: this.user.avatar });
+      this.updateLobbyUserInfo();
       this.showScreen('lobby-screen');
+      this.startRoomListRefresh();
     } catch (err) {
       alert('登录失败');
     }
   },
 
+  updateLobbyUserInfo() {
+    if (this.user) {
+      document.getElementById('user-nickname').textContent = this.user.nickname;
+      if (this.user.avatar) {
+        document.getElementById('user-avatar').style.backgroundImage = `url(${this.user.avatar})`;
+      }
+    }
+  },
+
+  // 房间列表相关
+  startRoomListRefresh() {
+    this.stopRoomListRefresh();
+    this.fetchRoomList();
+    this.roomListRefreshTimer = setInterval(() => this.fetchRoomList(), 5000);
+  },
+
+  stopRoomListRefresh() {
+    if (this.roomListRefreshTimer) {
+      clearInterval(this.roomListRefreshTimer);
+      this.roomListRefreshTimer = null;
+    }
+  },
+
+  async fetchRoomList() {
+    try {
+      const res = await fetch('/api/rooms');
+      const data = await res.json();
+      this.renderRoomList(data.rooms || []);
+    } catch (err) {
+      console.error('Failed to fetch room list', err);
+    }
+  },
+
+  renderRoomList(rooms) {
+    const container = document.getElementById('room-list');
+    if (rooms.length === 0) {
+      container.innerHTML = '<p class="empty-hint">暂无等待中的房间</p>';
+      return;
+    }
+
+    container.innerHTML = rooms.map(r => `
+      <div class="room-item" data-room-id="${r.id}">
+        <div class="room-item-info">
+          <span class="room-item-id">${r.id}</span>
+          <span class="room-item-host">${r.host}</span>
+        </div>
+        <div class="room-item-meta">
+          <span class="room-item-deck">${r.deckCount}副牌</span>
+          <span class="room-item-players">${r.totalPlayers}/4人${r.aiCount > 0 ? ` (AI${r.aiCount})` : ''}</span>
+        </div>
+        <button class="btn small primary room-join-btn" data-room-id="${r.id}">加入</button>
+      </div>
+    `).join('');
+
+    container.querySelectorAll('.room-join-btn').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const roomId = btn.dataset.roomId;
+        this.joinRoom(roomId);
+      };
+    });
+  },
+
   showScreen(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     document.getElementById(id).classList.add('active');
+
+    if (id === 'lobby-screen') {
+      this.startRoomListRefresh();
+    } else {
+      this.stopRoomListRefresh();
+    }
   },
 
   joinRoom(roomId) {
@@ -132,9 +235,29 @@ const App = {
     this.send({ type: 'join_room', roomId });
   },
 
+  onSeatClick(seatNum) {
+    if (!this.roomId) return;
+
+    // 如果自己还没坐下，点击空座位坐下
+    if (!this.isSitting) {
+      this.send({ type: 'join_room', roomId: this.roomId, seat: seatNum });
+      return;
+    }
+
+    // 如果已经坐下了，点击自己的座位不做任何事
+    if (this.seat === seatNum) return;
+
+    // 点击其他空座位，换座
+    this.send({ type: 'sit_seat', seat: seatNum });
+  },
+
   handleMessage(msg) {
     switch (msg.type) {
       case 'auth_ok':
+        break;
+
+      case 'room_list':
+        this.renderRoomList(msg.rooms);
         break;
 
       case 'room_created':
@@ -143,6 +266,7 @@ const App = {
 
       case 'joined':
         this.seat = msg.seat;
+        this.isSitting = true;
         document.getElementById('room-id-display').textContent = '房间号: ' + this.roomId;
         this.showScreen('room-screen');
         break;
@@ -192,7 +316,6 @@ const App = {
           this.selectedCards.clear();
           this.renderHand();
         }
-        // 新轮开始（自己是首家），先清空
         if (this.localCurrentTrick.length === 0) {
           document.getElementById('trick-cards').innerHTML = '';
         }
@@ -224,29 +347,60 @@ const App = {
   },
 
   updateRoomState(state) {
-    document.querySelectorAll('.seat').forEach(el => {
-      el.classList.remove('occupied', 'ready');
-      el.querySelector('.seat-name').textContent = '等待中';
-      el.querySelector('.seat-avatar').style.backgroundImage = '';
-      el.querySelector('.seat-status').textContent = '';
-    });
-
+    const btnReady = document.getElementById('btn-ready');
+    let myPlayer = null;
+    let playerCount = 0;
     let allReady = true;
-    state.players.forEach(p => {
-      const el = document.querySelector(`.seat[data-seat="${p.seat}"]`);
-      if (el) {
+
+    document.querySelectorAll('.seat').forEach(el => {
+      const seatNum = parseInt(el.dataset.seat);
+      const player = state.players[seatNum];
+      const seatAction = el.querySelector('.seat-action');
+
+      el.classList.remove('occupied', 'ready', 'my-seat');
+
+      if (player) {
         el.classList.add('occupied');
-        if (p.ready) el.classList.add('ready');
-        el.querySelector('.seat-name').textContent = p.nickname;
-        el.querySelector('.seat-avatar').style.backgroundImage = p.avatar ? `url(${p.avatar})` : '';
-        el.querySelector('.seat-status').textContent = p.ready ? '已准备' : '未准备';
+        if (player.ready) el.classList.add('ready');
+        if (player.userId === this.user?.id) {
+          el.classList.add('my-seat');
+          myPlayer = player;
+        }
+        el.querySelector('.seat-name').textContent = player.nickname + (player.isAI ? ' 🤖' : '');
+        el.querySelector('.seat-avatar').style.backgroundImage = player.avatar && !player.isAI ? `url(${player.avatar})` : '';
+        el.querySelector('.seat-status').textContent = player.ready ? '已准备' : '未准备';
+        if (seatAction) seatAction.classList.add('hidden');
+        playerCount++;
+        if (!player.ready) allReady = false;
+      } else {
+        el.querySelector('.seat-name').textContent = '空闲';
+        el.querySelector('.seat-avatar').style.backgroundImage = '';
+        el.querySelector('.seat-status').textContent = this.SEAT_LABELS[seatNum] + '位';
+        // 显示坐下按钮（仅空座位且自己没坐下，或者自己已坐下可以换座）
+        if (seatAction) {
+          if (!this.isSitting || (this.isSitting && this.seat !== seatNum)) {
+            seatAction.classList.remove('hidden');
+            seatAction.textContent = this.isSitting ? '换座' : '坐下';
+          } else {
+            seatAction.classList.add('hidden');
+          }
+        }
       }
-      if (!p.ready) allReady = false;
     });
 
-    const isHost = state.players[0]?.userId === this.user?.id;
+    // 更新准备按钮和开始按钮的状态
+    if (myPlayer) {
+      btnReady.classList.remove('hidden');
+      btnReady.textContent = myPlayer.ready ? '取消准备' : '准备';
+      this.isReady = myPlayer.ready;
+    } else {
+      btnReady.classList.add('hidden');
+      this.isReady = false;
+    }
+
+    const isHost = state.players.find(p => p !== null)?.userId === this.user?.id;
     const btnStart = document.getElementById('btn-start');
-    if (isHost && state.players.length === 4 && allReady) {
+    if (isHost && playerCount === 4 && allReady) {
       btnStart.classList.remove('hidden');
     } else {
       btnStart.classList.add('hidden');
@@ -410,7 +564,6 @@ const App = {
     const container = document.getElementById('trick-cards');
     container.innerHTML = '';
 
-    // 按座位顺序排列：自己(0)、下家(1)、对家(2)、上家(3)
     const ordered = [];
     for (let rel = 0; rel < 4; rel++) {
       const absSeat = (this.seat + rel) % 4;
@@ -469,15 +622,11 @@ const App = {
 
   markdownToHtml(md) {
     let html = md;
-    // code blocks
     html = html.replace(/```[\s\S]*?```/g, m => `<pre>${m.slice(3, -3).trim()}</pre>`);
-    // headers
     html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
     html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
     html = html.replace(/^# (.+)$/gm, '<h3>$1</h3>');
-    // bold
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    // tables
     const lines = html.split('\n');
     let inTable = false;
     let tableHtml = '';
@@ -489,7 +638,7 @@ const App = {
           inTable = true;
           tableHtml = '<table><thead><tr>' + cells.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
         } else if (cells.every(c => c.replace(/-/g, '').trim() === '')) {
-          // separator line, skip
+          // skip separator
         } else {
           tableHtml += '<tr>' + cells.map(c => `<td>${c}</td>`).join('') + '</tr>';
         }
@@ -508,10 +657,8 @@ const App = {
       outLines.push(tableHtml);
     }
     html = outLines.join('\n');
-    // lists
     html = html.replace(/^(\s*)- (.+)$/gm, '<li>$2</li>');
     html = html.replace(/(<li>.+<\/li>\n?)+/g, m => `<ul>${m}</ul>`);
-    // paragraphs
     html = html.replace(/\n\n+/g, '\n\n');
     html = html.split('\n\n').map(p => {
       p = p.trim();
@@ -547,6 +694,7 @@ const App = {
 const saved = localStorage.getItem('shengji_user');
 if (saved) {
   App.user = JSON.parse(saved);
+  App.updateLobbyUserInfo();
   App.showScreen('lobby-screen');
 }
 App.init();
