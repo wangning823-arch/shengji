@@ -1,0 +1,62 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "union_id": "guest_mp7zxuq7ywfo",
+      "open_id": null,
+      "nickname": "游客ywfo",
+      "avatar": "",
+      "created_at": 1778914797776
+    },
+    {
+      "id": 2,
+      "union_id": "guest_mp80bcts4jtm",
+      "open_id": null,
+      "nickname": "游客4jtm",
+      "avatar": "",
+      "created_at": 1778915427760
+    },
+    {
+      "id": 3,
+      "union_id": "guest_mp80crmo4dqb",
+      "open_id": null,
+      "nickname": "游客4dqb",
+      "avatar": "",
+      "created_at": 1778915493601
+    },
+    {
+      "id": 4,
+      "union_id": "guest_mp85n5jalcej",
+      "open_id": null,
+      "nickname": "游客lcej",
+      "avatar": "",
+      "created_at": 1778924376262
+    },
+    {
+      "id": 5,
+      "union_id": "guest_mp85o21d7wy0",
+      "open_id": null,
+      "nickname": "游客7wy0",
+      "avatar": "",
+      "created_at": 1778924418385
+    },
+    {
+      "id": 6,
+      "union_id": "guest_mp85p2yf2pkb",
+      "open_id": null,
+      "nickname": "游客2pkb",
+      "avatar": "",
+      "created_at": 1778924466232
+    },
+    {
+      "id": 7,
+      "union_id": "guest_mp85qqmgg4cx",
+      "open_id": null,
+      "nickname": "游客g4cx",
+      "avatar": "",
+      "created_at": 1778924543560
+    }
+  ],
+  "rooms": [],
+  "games": []
+}

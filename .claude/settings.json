@@ -1,0 +1,10 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://ark.cn-beijing.volces.com/api/coding",
+    "ANTHROPIC_AUTH_TOKEN": "ark-2f00503b-3dcd-443c-93b6-c12613dbd1fd-89faf",
+    "ANTHROPIC_MODEL": "doubao-seed-2.0-code",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "glm-5.1",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "kimi-k2.6",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "minimax-m2.7"
+  }
+}

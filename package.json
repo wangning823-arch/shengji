@@ -1,0 +1,17 @@
+{
+  "name": "shengji",
+  "version": "1.0.0",
+  "description": "打升级（拖拉机/80分）联机游戏",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "uuid": "^9.0.1",
+    "ws": "^8.20.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
