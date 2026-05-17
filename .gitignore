@@ -3,3 +3,5 @@ node_modules/
 *.db-journal
 .env
 npm-debug.log*
+server.log
+data.json

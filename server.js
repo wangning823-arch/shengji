@@ -192,9 +192,13 @@ wss.on('connection', (ws) => {
     if (ws.roomId && rooms.has(ws.roomId)) {
       const room = rooms.get(ws.roomId);
       room.clients.delete(ws);
-      const player = room.players.find(p => p && p.ws === ws);
-      if (player) {
-        player.online = false;
+      const idx = room.players.findIndex(p => p && p.ws === ws);
+      if (idx >= 0) {
+        const player = room.players[idx];
+        room.players[idx] = null;
+        // 清理该座位的AI
+        const roomAIs = roomAIPlayers.get(ws.roomId) || {};
+        delete roomAIs[idx];
         broadcast(ws.roomId, { type: 'player_left', seat: player.seat, nickname: player.nickname });
         broadcast(ws.roomId, { type: 'room_state', state: getRoomState(ws.roomId) });
       }
@@ -209,12 +213,15 @@ async function handleAITurn(roomId, game, seat) {
   const aiPlayer = roomAIs[seat];
   if (!aiPlayer) return;
 
+  // 检查是否还是这个AI的回合
+  if (game.currentSeat !== seat) return;
+
   await new Promise(r => setTimeout(r, 800 + Math.random() * 700));
 
   try {
     const gameState = game.toJSON(seat);
 
-    if (game.status === 'bidding') {
+    if (game.status === 'bidding' && game.currentSeat === seat) {
       const bidCards = await aiPlayer.decideBid(gameState);
       if (bidCards) {
         const result = game.bid(seat, bidCards);
@@ -231,6 +238,7 @@ async function handleAITurn(roomId, game, seat) {
           });
         }
       }
+      // 检查叫主之后是否还需要继续处理
       if (game.status === 'bidding' && game.currentSeat === seat) {
         await new Promise(r => setTimeout(r, 500));
         const confirmResult = game.confirmTrump();
@@ -249,6 +257,18 @@ async function handleAITurn(roomId, game, seat) {
           type: 'game_state',
           state: game.toJSON()
         });
+      }
+      // 叫主阶段后检查下一个玩家
+      if (game.currentSeat !== seat) {
+        setTimeout(() => {
+          const roomAIs = roomAIPlayers.get(roomId) || {};
+          if (roomAIs[game.currentSeat]) {
+            const currentGame = games.get(game.id);
+            if (currentGame) {
+              handleAITurn(roomId, currentGame, game.currentSeat);
+            }
+          }
+        }, 200);
       }
     } else if (game.status === 'playing' && game.currentSeat === seat) {
       const leadCards = game.currentTrick.length > 0 ? game.currentTrick[0].cards : null;
@@ -303,13 +323,13 @@ async function handleAITurn(roomId, game, seat) {
           state: game.toJSON()
         });
 
-        if (result.nextSeat !== undefined && result.nextSeat !== seat) {
+        if (result.nextSeat !== undefined) {
           setTimeout(() => {
             const roomAIs = roomAIPlayers.get(roomId) || {};
             if (roomAIs[result.nextSeat]) {
-              const game = games.get(room.gameId);
-              if (game) {
-                handleAITurn(roomId, game, result.nextSeat);
+              const currentGame = games.get(game.id);
+              if (currentGame) {
+                handleAITurn(roomId, currentGame, result.nextSeat);
               }
             }
           }, 200);
@@ -526,7 +546,7 @@ const messageHandlers = {
     const player = room.players.find(p => p && p.ws === ws);
     if (player) {
       player.ready = msg.ready;
-      broadcast(ws.roomId, { type: 'player_ready', seat: ws.seat, ready: msg.ready });
+      broadcast(ws.roomId, { type: 'player_ready', seat: player.seat, ready: msg.ready });
       broadcast(ws.roomId, { type: 'room_state', state: getRoomState(ws.roomId) });
     }
   },
@@ -549,6 +569,9 @@ const messageHandlers = {
       send(ws, { type: 'error', message: '有人未准备' });
       return;
     }
+
+    // 按座位号排序，确保 GameEngine 内部索引与房间座位一致
+    activePlayers.sort((a, b) => a.seat - b.seat);
 
     const game = new GameEngine(room.id, room.deckCount, activePlayers.map(p => ({
       userId: p.userId,

@@ -94,8 +94,11 @@ const App = {
       this.isSitting = false;
       this.isReady = false;
       this.seat = -1;
-      this.startRoomListRefresh();
+      this.roomId = null;
+      this.showScreen('lobby-screen');
     };
+
+    document.getElementById('btn-logout').onclick = () => this.logout();
 
     document.getElementById('btn-ready').onclick = () => {
       this.isReady = !this.isReady;
@@ -163,6 +166,24 @@ const App = {
         document.getElementById('user-avatar').style.backgroundImage = `url(${this.user.avatar})`;
       }
     }
+  },
+
+  logout() {
+    this.stopRoomListRefresh();
+    if (this.roomId) {
+      this.send({ type: 'leave_room' });
+    }
+    this.user = null;
+    this.roomId = null;
+    this.seat = -1;
+    this.isSitting = false;
+    this.isReady = false;
+    this.gameState = null;
+    this.myHand = [];
+    this.selectedCards.clear();
+    localStorage.removeItem('shengji_user');
+    document.getElementById('nickname-input').value = '';
+    this.showScreen('login-screen');
   },
 
   // 房间列表相关

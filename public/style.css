@@ -161,6 +161,12 @@ html, body {
   gap: 10px;
 }
 
+#btn-logout {
+  background: rgba(255,255,255,0.15);
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
 .avatar-placeholder {
   width: 40px;
   height: 40px;
