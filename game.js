@@ -238,14 +238,79 @@ function validatePlay(hand, playedCards, leadCards, trumpSuit, trumpLevel) {
   return { valid: true };
 }
 
-function findWinningCard(cards, trumpSuit, trumpLevel, leadSuit) {
+function findWinningCard(trickPlays, trumpSuit, trumpLevel, leadSuit) {
+  const leadCards = trickPlays[0].cards;
+  const leadPattern = getCardPattern(leadCards, trumpSuit, trumpLevel);
+
   let winner = 0;
-  for (let i = 1; i < cards.length; i++) {
-    if (compareCards(cards[i], cards[winner], trumpSuit, trumpLevel, leadSuit) > 0) {
+
+  for (let i = 1; i < trickPlays.length; i++) {
+    const curr = trickPlays[i];
+    const prev = trickPlays[winner];
+
+    if (isPlayBeating(curr.cards, prev.cards, leadPattern, leadSuit, trumpSuit, trumpLevel)) {
       winner = i;
     }
   }
   return winner;
+}
+
+function isPlayBeating(playCards, winnerCards, leadPattern, leadSuit, trumpSuit, trumpLevel) {
+  const playIsTrump = playCards.some(c => isTrump(c, trumpSuit, trumpLevel));
+  const winnerIsTrump = winnerCards.some(c => isTrump(c, trumpSuit, trumpLevel));
+
+  // 主牌 vs 非主牌
+  if (playIsTrump && !winnerIsTrump) return true;
+  if (!playIsTrump && winnerIsTrump) return false;
+
+  // 都是主牌或都不是主牌时，检查是否跟了首家的花色
+  const playInSuit = playCards.filter(c => {
+    if (isTrump(c, trumpSuit, trumpLevel)) return playIsTrump;
+    return c.suit === leadSuit;
+  });
+  const winnerInSuit = winnerCards.filter(c => {
+    if (isTrump(c, trumpSuit, trumpLevel)) return winnerIsTrump;
+    return c.suit === leadSuit;
+  });
+
+  // 都没跟花色，先出的赢
+  if (playInSuit.length === 0 && winnerInSuit.length === 0) return false;
+  // 有一方没跟花色
+  if (playInSuit.length === 0) return false;
+  if (winnerInSuit.length === 0) return true;
+
+  // 对于对子/拖拉机：只有跟了同类型才能赢
+  if (leadPattern.type === 'pair' || leadPattern.type === 'tractor') {
+    const playPattern = getCardPattern(playInSuit, trumpSuit, trumpLevel);
+    const winnerPattern = getCardPattern(winnerInSuit, trumpSuit, trumpLevel);
+
+    const playMatchesType = playPattern.type === leadPattern.type;
+    const winnerMatchesType = winnerPattern.type === leadPattern.type;
+
+    // 都跟了同类型，比最大的牌
+    if (playMatchesType && winnerMatchesType) {
+      const playMax = getMaxCard(playInSuit, trumpSuit, trumpLevel, leadSuit);
+      const winnerMax = getMaxCard(winnerInSuit, trumpSuit, trumpLevel, leadSuit);
+      return compareCards(playMax, winnerMax, trumpSuit, trumpLevel, leadSuit) > 0;
+    }
+    // 只有一方跟了同类型
+    if (playMatchesType && !winnerMatchesType) return true;
+    if (!playMatchesType && winnerMatchesType) return false;
+    // 都没跟同类型，比最大牌
+    const playMax2 = getMaxCard(playInSuit, trumpSuit, trumpLevel, leadSuit);
+    const winnerMax2 = getMaxCard(winnerInSuit, trumpSuit, trumpLevel, leadSuit);
+    return compareCards(playMax2, winnerMax2, trumpSuit, trumpLevel, leadSuit) > 0;
+  }
+
+  // 单张或mix，比最大牌
+  const playMax = getMaxCard(playInSuit, trumpSuit, trumpLevel, leadSuit);
+  const winnerMax = getMaxCard(winnerInSuit, trumpSuit, trumpLevel, leadSuit);
+  return compareCards(playMax, winnerMax, trumpSuit, trumpLevel, leadSuit) > 0;
+}
+
+function getMaxCard(cards, trumpSuit, trumpLevel, leadSuit) {
+  if (!cards || cards.length === 0) return { suit: 'joker', rank: 'small' };
+  return cards.reduce((max, c) => compareCards(c, max, trumpSuit, trumpLevel, leadSuit) > 0 ? c : max);
 }
 
 function getRoundPoints(cards) {
@@ -427,10 +492,33 @@ class GameEngine {
         this.trumpSuit = lastCard.suit === 'joker' ? null : lastCard.suit;
       }
     }
+    // 庄家拿底牌
+    const dealer = this.players[this.dealer];
+    dealer.hand.push(...this.bottomCards);
+    this.status = 'taking_bottom';
+    this.currentSeat = this.dealer;
+    return { trumpSuit: this.trumpSuit, bottomCount: this.bottomCards.length };
+  }
+
+  setBottom(seat, cardIds) {
+    if (this.status !== 'taking_bottom') return { success: false, reason: '不在扣底阶段' };
+    if (seat !== this.dealer) return { success: false, reason: '只有庄家可以扣底' };
+
+    const dealer = this.players[seat];
+    const cards = cardIds.map(id => dealer.hand.find(c => c.id === id)).filter(Boolean);
+    if (cards.length !== this.bottomCards.length) {
+      return { success: false, reason: `需要扣回${this.bottomCards.length}张底牌` };
+    }
+    if (cards.some(c => !dealer.hand.find(h => h.id === c.id))) {
+      return { success: false, reason: '只能选择手牌中的牌' };
+    }
+
+    this.bottomCards = cards;
+    dealer.hand = dealer.hand.filter(c => !cardIds.includes(c.id));
     this.status = 'playing';
     this.leadSeat = this.dealer;
     this.currentSeat = this.dealer;
-    return { trumpSuit: this.trumpSuit };
+    return { success: true };
   }
 
   play(seat, cardIds) {
@@ -466,7 +554,7 @@ class GameEngine {
       const leadSuit = this.currentTrick[0].cards[0].suit;
       const allCards = this.currentTrick.map(t => t.cards).flat();
       const winnerIdx = findWinningCard(
-        this.currentTrick.map(t => t.cards[0]),
+        this.currentTrick,
         this.trumpSuit, this.trumpLevel, leadSuit
       );
       const winnerSeat = this.currentTrick[winnerIdx].seat;
@@ -475,6 +563,7 @@ class GameEngine {
 
       this.tricks.push({
         cards: allCards,
+        plays: [...this.currentTrick],
         winnerSeat,
         winnerTeam,
         points
@@ -512,6 +601,27 @@ class GameEngine {
     this.status = 'finished';
     const dealerTeam = this.players[this.dealer].team;
     const idleTeam = dealerTeam === 1 ? 2 : 1;
+
+    // 底牌得分：最后一轮赢家获得底牌中的分数
+    const lastTrick = this.tricks[this.tricks.length - 1];
+    const lastWinnerTeam = lastTrick ? lastTrick.winnerTeam : dealerTeam;
+    let bottomPoints = getRoundPoints(this.bottomCards);
+    let bottomMultiplier = 1;
+
+    // 抠底翻倍：如果最后一轮用拖拉机赢，底分翻倍数
+    if (lastTrick && lastWinnerTeam !== dealerTeam) {
+      const winnerPlay = lastTrick.plays.find(t => t.seat === lastTrick.winnerSeat);
+      if (winnerPlay) {
+        const pattern = getCardPattern(winnerPlay.cards, this.trumpSuit, this.trumpLevel);
+        if (pattern.type === 'tractor') {
+          bottomMultiplier = winnerPlay.cards.length;
+          bottomPoints *= bottomMultiplier;
+        }
+      }
+      if (lastWinnerTeam === 1) this.scores.team1 += bottomPoints;
+      else this.scores.team2 += bottomPoints;
+    }
+
     const idleScore = dealerTeam === 1 ? this.scores.team2 : this.scores.team1;
 
     const steps = getUpgradeSteps(idleScore, this.totalScore, this.deckCount);
@@ -538,7 +648,9 @@ class GameEngine {
       scores: this.scores,
       levels: this.levels,
       nextDealer: this.dealer,
-      nextTrumpLevel: this.trumpLevel
+      nextTrumpLevel: this.trumpLevel,
+      bottomPoints,
+      bottomMultiplier
     };
   }
 
@@ -556,13 +668,16 @@ class GameEngine {
       levels: this.levels,
       currentTrick: this.currentTrick,
       tricksCount: this.tricks.length,
+      bottomCount: this.bottomCards.length,
+      bottomCards: seat === this.dealer && this.status === 'taking_bottom' ? this.bottomCards : undefined,
       players: this.players.map(p => ({
         seat: p.seat,
         team: p.team,
         handCount: p.hand.length,
         hand: seat === p.seat ? p.hand : undefined
       })),
-      bids: this.bids
+      bids: this.bids,
+      tricks: this.tricks
     };
   }
 }

@@ -2,8 +2,8 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
-const { GameEngine } = require('./game');
-const { LLMAIPlayer } = require('./llm-ai');
+const { GameEngine, isTrump } = require('./game');
+const { LLMAIPlayer, FallbackAI } = require('./llm-ai');
 const db = require('./db');
 
 // 加载配置
@@ -209,14 +209,27 @@ wss.on('connection', (ws) => {
 
 // AI自动出牌处理
 async function handleAITurn(roomId, game, seat) {
+  console.log(`[AI] handleAITurn called: roomId=${roomId}, seat=${seat}, gameStatus=${game.status}, currentSeat=${game.currentSeat}`);
   const roomAIs = roomAIPlayers.get(roomId) || {};
   const aiPlayer = roomAIs[seat];
-  if (!aiPlayer) return;
+  if (!aiPlayer) {
+    console.log(`[AI] No AI player at seat ${seat}, available seats: ${Object.keys(roomAIs).join(',')}`);
+    return;
+  }
 
   // 检查是否还是这个AI的回合
-  if (game.currentSeat !== seat) return;
+  if (game.currentSeat !== seat) {
+    console.log(`[AI] Not seat ${seat}'s turn, currentSeat=${game.currentSeat}`);
+    return;
+  }
 
   await new Promise(r => setTimeout(r, 800 + Math.random() * 700));
+
+  // 重新检查（延迟后可能已变化）
+  if (game.currentSeat !== seat) {
+    console.log(`[AI] After delay, not seat ${seat}'s turn anymore, currentSeat=${game.currentSeat}`);
+    return;
+  }
 
   try {
     const gameState = game.toJSON(seat);
@@ -249,16 +262,30 @@ async function handleAITurn(roomId, game, seat) {
           dealer: game.dealer
         });
         broadcast(roomId, {
+          type: 'bottom_taken',
+          dealer: game.dealer,
+          bottomCount: confirmResult.bottomCount
+        });
+        broadcast(roomId, {
           type: 'turn_changed',
           seat: game.currentSeat,
-          phase: 'playing'
+          phase: 'taking_bottom'
         });
         broadcast(roomId, {
           type: 'game_state',
           state: game.toJSON()
         });
+        // 给庄家单独发送包含手牌和底牌的 state
+        const currentRoom = rooms.get(roomId);
+        const dealerPlayer = currentRoom ? currentRoom.players[game.dealer] : null;
+        if (dealerPlayer && dealerPlayer.ws) {
+          send(dealerPlayer.ws, {
+            type: 'game_state',
+            state: game.toJSON(game.dealer)
+          });
+        }
       }
-      // 叫主阶段后检查下一个玩家
+      // 叫主阶段后检查下一个玩家（扣底）
       if (game.currentSeat !== seat) {
         setTimeout(() => {
           const roomAIs = roomAIPlayers.get(roomId) || {};
@@ -270,13 +297,94 @@ async function handleAITurn(roomId, game, seat) {
           }
         }, 200);
       }
+    } else if (game.status === 'taking_bottom' && game.currentSeat === seat) {
+      const bottomCards = await aiPlayer.decideBottom(gameState);
+      if (bottomCards) {
+        const cardIds = bottomCards.map(c => c.id);
+        const result = game.setBottom(seat, cardIds);
+        if (result.success) {
+          broadcast(roomId, {
+            type: 'bottom_set',
+            dealer: seat
+          });
+          broadcast(roomId, {
+            type: 'turn_changed',
+            seat: game.currentSeat,
+            phase: 'playing'
+          });
+          broadcast(roomId, {
+            type: 'game_state',
+            state: game.toJSON()
+          });
+          setTimeout(() => {
+            const roomAIs = roomAIPlayers.get(roomId) || {};
+            if (roomAIs[game.currentSeat]) {
+              const currentGame = games.get(game.id);
+              if (currentGame) {
+                handleAITurn(roomId, currentGame, game.currentSeat);
+              }
+            }
+          }, 500);
+        }
+      }
     } else if (game.status === 'playing' && game.currentSeat === seat) {
+      // 先同步AI手牌，确保decidePlay用的是最新手牌
+      aiPlayer.hand = game.players[seat].hand;
+      // 重新获取gameState以包含最新手牌
+      const freshGameState = game.toJSON(seat);
+
       const leadCards = game.currentTrick.length > 0 ? game.currentTrick[0].cards : null;
-      const playCards = await aiPlayer.decidePlay(gameState, leadCards);
-      const cardIds = playCards.map(c => c.id);
-      const result = game.play(seat, cardIds);
+      const handIds = aiPlayer.hand.map(c => c.id);
+      console.log(`[AI] Seat ${seat} playing, leadCards=${leadCards ? leadCards.length : 'null'}, trickLen=${game.currentTrick.length}, handSize=${aiPlayer.hand.length}, handIds=${handIds.join(',')}`);
+      let playCards = await aiPlayer.decidePlay(freshGameState, leadCards);
+      let cardIds = playCards.map(c => c.id);
+      // 检查选出的牌是否在手牌中
+      const inHand = cardIds.every(id => handIds.includes(id));
+      console.log(`[AI] Seat ${seat} decided: ${cardIds.join(',')}, inHand=${inHand}`);
+      if (!inHand) {
+        // 重新从game获取手牌
+        aiPlayer.hand = game.players[seat].hand;
+        const fbCards = FallbackAI.selectBestValid(aiPlayer.hand, leadCards, freshGameState);
+        playCards = fbCards;
+        cardIds = playCards.map(c => c.id);
+        console.log(`[AI] Seat ${seat} fallback (not in hand): ${cardIds.join(',')}`);
+      }
+      let result = game.play(seat, cardIds);
+      console.log(`[AI] Play result: success=${result.success}, reason=${result.reason || ''}, nextSeat=${result.nextSeat}`);
+
+      // 如果出牌失败，用fallback重试
+      if (!result.success) {
+        console.log(`[AI] Seat ${seat} play failed, using fallback`);
+        aiPlayer.hand = game.players[seat].hand;
+        const fallbackCards = FallbackAI.selectBestValid(aiPlayer.hand, leadCards, freshGameState);
+        const fallbackIds = fallbackCards.map(c => c.id);
+        result = game.play(seat, fallbackIds);
+        console.log(`[AI] Seat ${seat} fallback result: success=${result.success}, reason=${result.reason || ''}`);
+      }
+
+      // 如果fallback也失败，暴力尝试
+      if (!result.success) {
+        console.log(`[AI] Seat ${seat} fallback also failed, brute force`);
+        aiPlayer.hand = game.players[seat].hand;
+        const needCount = leadCards ? leadCards.length : 1;
+        // 按同花色优先，补其他花色
+        const leadSuit = leadCards ? leadCards[0].suit : null;
+        const leadIsTrump = leadCards ? isTrump(leadCards[0], game.trumpSuit, game.trumpLevel) : false;
+        const sameSuit = aiPlayer.hand.filter(c => {
+          if (leadIsTrump) return isTrump(c, game.trumpSuit, game.trumpLevel);
+          return c.suit === leadSuit;
+        });
+        const other = aiPlayer.hand.filter(c => !sameSuit.includes(c));
+        const tryCards = [...sameSuit.slice(0, needCount), ...other.slice(0, Math.max(0, needCount - sameSuit.length))];
+        const tryIds = tryCards.map(c => c.id);
+        result = game.play(seat, tryIds);
+        console.log(`[AI] Seat ${seat} brute force: ${tryIds.join(',')}, success=${result.success}, reason=${result.reason || ''}`);
+      }
 
       if (result.success) {
+        // 出牌成功后同步AI手牌
+        aiPlayer.hand = game.players[seat].hand;
+
         broadcast(roomId, {
           type: 'cards_played',
           seat,
@@ -303,7 +411,9 @@ async function handleAITurn(roomId, game, seat) {
             scores: result.scores,
             levels: result.levels,
             nextDealer: result.nextDealer,
-            nextTrumpLevel: result.nextTrumpLevel
+            nextTrumpLevel: result.nextTrumpLevel,
+            bottomPoints: result.bottomPoints,
+            bottomMultiplier: result.bottomMultiplier
           });
           const room = rooms.get(roomId);
           if (room) {
@@ -323,17 +433,32 @@ async function handleAITurn(roomId, game, seat) {
           state: game.toJSON()
         });
 
-        if (result.nextSeat !== undefined) {
-          setTimeout(() => {
-            const roomAIs = roomAIPlayers.get(roomId) || {};
-            if (roomAIs[result.nextSeat]) {
-              const currentGame = games.get(game.id);
-              if (currentGame) {
-                handleAITurn(roomId, currentGame, result.nextSeat);
-              }
-            }
-          }, 200);
-        }
+        // 总是获取最新的游戏状态来检查下一个玩家
+        setTimeout(() => {
+          const currentGame = games.get(game.id);
+          if (!currentGame || currentGame.status !== 'playing') return;
+          const roomAIs = roomAIPlayers.get(roomId) || {};
+          if (roomAIs[currentGame.currentSeat]) {
+            handleAITurn(roomId, currentGame, currentGame.currentSeat);
+          }
+        }, 200);
+      } else {
+        // 出牌完全失败，跳过当前AI，让下一个玩家继续
+        console.log(`[AI] Seat ${seat} all attempts failed, skipping turn`);
+        game.currentSeat = (game.currentSeat + 1) % 4;
+        broadcast(roomId, {
+          type: 'turn_changed',
+          seat: game.currentSeat,
+          phase: 'playing'
+        });
+        setTimeout(() => {
+          const currentGame = games.get(game.id);
+          if (!currentGame || currentGame.status !== 'playing') return;
+          const roomAIs = roomAIPlayers.get(roomId) || {};
+          if (roomAIs[currentGame.currentSeat]) {
+            handleAITurn(roomId, currentGame, currentGame.currentSeat);
+          }
+        }, 200);
       }
     }
   } catch (err) {
@@ -665,21 +790,78 @@ const messageHandlers = {
       trumpLevel: game.trumpLevel,
       dealer: game.dealer
     });
+
+    // 发送底牌给庄家
+    broadcast(ws.roomId, {
+      type: 'bottom_taken',
+      dealer: game.dealer,
+      bottomCount: result.bottomCount
+    });
     broadcast(ws.roomId, {
       type: 'turn_changed',
       seat: game.currentSeat,
-      phase: 'playing'
+      phase: 'taking_bottom'
     });
     broadcast(ws.roomId, {
       type: 'game_state',
       state: game.toJSON()
     });
+    // 给庄家单独发送包含手牌和底牌的 state
+    const dealerPlayer = room.players[game.dealer];
+    if (dealerPlayer && dealerPlayer.ws) {
+      send(dealerPlayer.ws, {
+        type: 'game_state',
+        state: game.toJSON(game.dealer)
+      });
+    }
 
     const roomAIs = roomAIPlayers.get(ws.roomId) || {};
     if (roomAIs[game.currentSeat]) {
       setTimeout(() => {
         handleAITurn(ws.roomId, game, game.currentSeat);
-      }, 200);
+      }, 500);
+    }
+  },
+
+  set_bottom(ws, msg) {
+    if (!ws.roomId) return;
+    const room = rooms.get(ws.roomId);
+    if (!room || !room.gameId) return;
+    const game = games.get(room.gameId);
+    if (!game) return;
+
+    const result = game.setBottom(ws.seat, msg.cardIds);
+    if (result.success) {
+      broadcast(ws.roomId, {
+        type: 'bottom_set',
+        dealer: ws.seat
+      });
+      broadcast(ws.roomId, {
+        type: 'turn_changed',
+        seat: game.currentSeat,
+        phase: 'playing'
+      });
+      broadcast(ws.roomId, {
+        type: 'game_state',
+        state: game.toJSON()
+      });
+      // 给庄家单独发送包含更新后手牌的 state
+      const dealerPlayer = room.players[game.dealer];
+      if (dealerPlayer && dealerPlayer.ws) {
+        send(dealerPlayer.ws, {
+          type: 'game_state',
+          state: game.toJSON(game.dealer)
+        });
+      }
+
+      const roomAIs = roomAIPlayers.get(ws.roomId) || {};
+      if (roomAIs[game.currentSeat]) {
+        setTimeout(() => {
+          handleAITurn(ws.roomId, game, game.currentSeat);
+        }, 500);
+      }
+    } else {
+      send(ws, { type: 'error', message: result.reason });
     }
   },
 
@@ -718,7 +900,9 @@ const messageHandlers = {
           scores: result.scores,
           levels: result.levels,
           nextDealer: result.nextDealer,
-          nextTrumpLevel: result.nextTrumpLevel
+          nextTrumpLevel: result.nextTrumpLevel,
+          bottomPoints: result.bottomPoints,
+          bottomMultiplier: result.bottomMultiplier
         });
         room.status = 'waiting';
         room.gameId = null;

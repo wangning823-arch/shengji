@@ -116,7 +116,7 @@ class CandidateGenerator {
       const bMax = Math.max(...b.map(c => this.cardStrengthValue(c, trumpSuit, trumpLevel)));
       return aMax - bMax;
     })[0];
-    candidates.push({ cards: minPlay, description: '跟最小的牌' });
+    candidates.push({ cards: minPlay, description: leadPattern.type === 'pair' ? '跟最小的对子' : '跟最小的牌' });
 
     // 选项2：出能赢的最大牌（如果有）
     const winningPlays = validPlays.filter(play => {
@@ -128,7 +128,7 @@ class CandidateGenerator {
         const bMax = Math.max(...b.map(c => this.cardStrengthValue(c, trumpSuit, trumpLevel)));
         return bMax - aMax;
       })[0];
-      candidates.push({ cards: maxWinPlay, description: '出能赢的最大牌' });
+      candidates.push({ cards: maxWinPlay, description: leadPattern.type === 'pair' ? '出能赢的最大对子' : '出能赢的最大牌' });
     }
 
     // 选项3：出分牌（如果有）
@@ -141,38 +141,99 @@ class CandidateGenerator {
   }
 
   static findAllValidPlays(hand, leadCards, trumpSuit, trumpLevel) {
+    const leadPattern = getCardPattern(leadCards, trumpSuit, trumpLevel);
+    const leadIsTrump = isTrump(leadCards[0], trumpSuit, trumpLevel);
+    const leadSuit = leadIsTrump ? 'trump' : leadCards[0].suit;
+    const leadCount = leadCards.length;
+
+    // 找出同花色/主牌的手牌
+    const sameSuitCards = hand.filter(c => {
+      if (leadIsTrump) return isTrump(c, trumpSuit, trumpLevel);
+      return !isTrump(c, trumpSuit, trumpLevel) && c.suit === leadSuit;
+    });
+
+    // 非同花色牌，按牌力排序（弱的优先垫）
+    const otherCards = hand.filter(c => !sameSuitCards.includes(c))
+      .sort((a, b) => this.cardStrengthValue(a, trumpSuit, trumpLevel) - this.cardStrengthValue(b, trumpSuit, trumpLevel));
+
     const validPlays = [];
 
-    // 简单实现：尝试各种组合
-    if (leadCards.length === 1) {
+    if (leadCount === 1) {
       // 跟单张
-      for (const card of hand) {
-        const validation = validatePlay(hand, [card], leadCards, trumpSuit, trumpLevel);
-        if (validation.valid) {
+      if (sameSuitCards.length > 0) {
+        for (const card of sameSuitCards) {
+          validPlays.push([card]);
+        }
+      } else {
+        for (const card of hand) {
           validPlays.push([card]);
         }
       }
     } else {
-      // 跟多张：先找同花色
-      const leadSuit = leadCards[0].suit;
-      const leadIsTrump = isTrump(leadCards[0], trumpSuit, trumpLevel);
+      // 跟多张（对子/拖拉机/等）
+      // 核心规则：有同花色必须出同花色，不够的补其他牌
 
-      const sameSuitCards = hand.filter(c => {
-        if (leadIsTrump) return isTrump(c, trumpSuit, trumpLevel);
-        return !isTrump(c, trumpSuit, trumpLevel) && c.suit === leadSuit;
-      });
-
-      if (sameSuitCards.length >= leadCards.length) {
-        validPlays.push(sameSuitCards.slice(0, leadCards.length));
+      if (sameSuitCards.length >= leadCount) {
+        // 同花色够数：优先出对子/拖拉机，再出普通组合
+        if (leadPattern.type === 'pair') {
+          const pairs = this.findPairsInSuit(sameSuitCards, trumpSuit, trumpLevel);
+          if (pairs.length > 0) {
+            validPlays.push(...pairs);
+          }
+        }
+        // 无论什么类型，都添加同花色前leadCount张作为保底
+        validPlays.push(sameSuitCards.slice(0, leadCount));
       } else if (sameSuitCards.length > 0) {
-        validPlays.push(sameSuitCards);
+        // 同花色不够：出所有同花色 + 补其他牌
+        const play = [...sameSuitCards];
+        for (const c of otherCards) {
+          if (play.length >= leadCount) break;
+          play.push(c);
+        }
+        validPlays.push(play);
       } else {
-        // 随便垫牌
-        validPlays.push(hand.slice(0, leadCards.length));
+        // 没有同花色：垫任意牌
+        validPlays.push(hand.slice(0, Math.min(leadCount, hand.length)));
       }
     }
 
-    return validPlays.length > 0 ? validPlays : [hand.slice(0, leadCards.length || 1)];
+    // 用validatePlay过滤
+    const filtered = validPlays.filter(play => {
+      const v = validatePlay(hand, play, leadCards, trumpSuit, trumpLevel);
+      return v.valid;
+    });
+
+    if (filtered.length > 0) return filtered;
+
+    // 如果所有候选都被过滤了，暴力搜索：出同花色 + 补牌的所有组合
+    if (leadCount > 1 && sameSuitCards.length > 0 && sameSuitCards.length < leadCount) {
+      const fill = otherCards.slice(0, leadCount - sameSuitCards.length);
+      validPlays.push([...sameSuitCards, ...fill]);
+    }
+
+    // 最后保底
+    return [hand.slice(0, Math.min(leadCount, hand.length))];
+  }
+
+  static findPairsInSuit(suitCards, trumpSuit, trumpLevel) {
+    const pairs = [];
+    const map = {};
+    for (const card of suitCards) {
+      const key = `${card.suit}_${card.rank}`;
+      if (!map[key]) map[key] = [];
+      map[key].push(card);
+    }
+    for (const key of Object.keys(map)) {
+      if (map[key].length >= 2) {
+        pairs.push(map[key].slice(0, 2));
+      }
+    }
+    return pairs;
+  }
+
+  static findTractorsInSuit(suitCards, length, trumpSuit, trumpLevel) {
+    // 简化：返回空数组，由上层处理
+    return [];
   }
 
   static findPairs(hand) {
@@ -241,6 +302,15 @@ class FallbackAI {
     }
     return null;
   }
+
+  static decideBottom(hand, bottomCount, trumpSuit, trumpLevel) {
+    // 选最弱的牌扣底：先按牌力排序，取最弱的
+    const sorted = [...hand].sort((a, b) => {
+      return CandidateGenerator.cardStrengthValue(a, trumpSuit, trumpLevel) -
+             CandidateGenerator.cardStrengthValue(b, trumpSuit, trumpLevel);
+    });
+    return sorted.slice(0, bottomCount);
+  }
 }
 
 class LLMAIPlayer {
@@ -264,6 +334,15 @@ class LLMAIPlayer {
     // 亮主决策：先用规则AI，有LLM可以优化
     const bid = FallbackAI.decideBid(this.hand, gameState.trumpLevel);
     return bid;
+  }
+
+  async decideBottom(gameState) {
+    return FallbackAI.decideBottom(
+      this.hand,
+      gameState.bottomCount || 8,
+      gameState.trumpSuit,
+      gameState.trumpLevel
+    );
   }
 
   async decidePlay(gameState, leadCards) {

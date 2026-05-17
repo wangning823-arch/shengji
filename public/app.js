@@ -16,6 +16,7 @@ const App = {
   SUIT_NAMES: { spade: '黑桃', heart: '红桃', diamond: '方块', club: '梅花' },
   RANK_ORDER: ['3','4','5','6','7','8','9','10','J','Q','K','A','2'],
   localCurrentTrick: [],
+  playedHistory: [],
 
   SEAT_LABELS: ['北', '东', '南', '西'],
 
@@ -134,7 +135,13 @@ const App = {
 
     document.getElementById('btn-rules').onclick = () => this.showRules();
     document.getElementById('btn-close-rules').onclick = () => this.hideRules();
-    document.querySelector('.modal-overlay').onclick = () => this.hideRules();
+
+    document.getElementById('btn-set-bottom').onclick = () => this.setBottom();
+    document.getElementById('btn-played-history').onclick = () => this.showPlayedHistory();
+    document.getElementById('btn-close-history').onclick = () => this.hidePlayedHistory();
+
+    document.getElementById('btn-view-bottom').onclick = () => this.showBottomCards();
+    document.getElementById('btn-close-bottom').onclick = () => this.hideBottomCards();
   },
 
   async loginGuest() {
@@ -302,17 +309,25 @@ const App = {
       case 'game_started':
         this.myHand = msg.hand || [];
         this.localCurrentTrick = [];
-        this.sortHand();
+        this.playedHistory = [];
+        this.bottomCards = [];
         this.gameState = msg.state;
+        this.clearTrickArea();
+        document.getElementById('trick-winner').textContent = '';
+        this.sortHand();
         this.showScreen('game-screen');
         this.updateGameUI();
         document.getElementById('btn-bid').classList.remove('hidden');
         document.getElementById('btn-play').classList.add('hidden');
         document.getElementById('btn-confirm-trump').classList.add('hidden');
+        document.getElementById('btn-set-bottom').classList.add('hidden');
         break;
 
       case 'game_state':
         this.gameState = msg.state;
+        if (this.gameState.bottomCards) {
+          this.bottomCards = this.gameState.bottomCards;
+        }
         this.updateGameUI();
         break;
 
@@ -330,6 +345,16 @@ const App = {
         document.getElementById('btn-confirm-trump').classList.add('hidden');
         break;
 
+      case 'bottom_taken':
+        this.showToast(`${this.getPlayerName(msg.dealer)} 拿底牌 (${msg.bottomCount}张)`);
+        break;
+
+      case 'bottom_set':
+        this.showToast(`${this.getPlayerName(msg.dealer)} 已扣底`);
+        document.getElementById('btn-set-bottom').classList.add('hidden');
+        // 保留 bottomCards 以便庄家随时查看
+        break;
+
       case 'cards_played':
         if (msg.seat === this.seat) {
           const playedIds = msg.cards.map(c => c.id);
@@ -338,7 +363,7 @@ const App = {
           this.renderHand();
         }
         if (this.localCurrentTrick.length === 0) {
-          document.getElementById('trick-cards').innerHTML = '';
+          this.clearTrickArea();
         }
         this.localCurrentTrick.push({ seat: msg.seat, cards: msg.cards });
         this.renderTrick();
@@ -346,15 +371,39 @@ const App = {
 
       case 'trick_ended':
         this.showToast(`${this.getPlayerName(msg.winnerSeat)} 得 ${msg.points} 分`);
+        // 保存本轮记录到历史
+        if (this.localCurrentTrick.length > 0) {
+          this.playedHistory.push({
+            plays: [...this.localCurrentTrick],
+            winnerSeat: msg.winnerSeat,
+            winnerTeam: msg.winnerTeam,
+            points: msg.points
+          });
+        }
+        // 记录当前trick的数量，1.5秒后只清空对应数量的条目
+        const trickLen = this.localCurrentTrick.length;
         setTimeout(() => {
-          document.getElementById('trick-cards').innerHTML = '';
-          this.localCurrentTrick = [];
+          // 只清空属于上一轮的牌，如果新牌已加入则保留
+          if (this.localCurrentTrick.length <= trickLen) {
+            this.clearTrickArea();
+            this.localCurrentTrick = [];
+          }
         }, 1500);
         break;
 
       case 'game_ended':
         const dealerWon = msg.idleScore <= 75;
-        this.showToast(`本局结束！${dealerWon ? '庄家胜' : '闲家胜'}，${msg.levels.team1} : ${msg.levels.team2}`);
+        let endMsg = `本局结束！${dealerWon ? '庄家胜' : '闲家胜'}`;
+        if (msg.bottomPoints > 0) {
+          endMsg += `，底牌${msg.bottomPoints}分`;
+          if (msg.bottomMultiplier > 1) {
+            endMsg += `(翻${msg.bottomMultiplier}倍)`;
+          }
+        }
+        endMsg += `，${msg.levels.team1} : ${msg.levels.team2}`;
+        this.showToast(endMsg);
+        this.bottomCards = [];
+        document.getElementById('btn-view-bottom').classList.add('hidden');
         break;
 
       case 'chat':
@@ -443,7 +492,26 @@ const App = {
         el.querySelector('.player-name').textContent = p.userId === this.user?.id ? '我' : p.nickname;
         el.querySelector('.player-cards-count').textContent = p.handCount + '张';
       }
+      // 如果服务端传了手牌，更新本地手牌
+      if (p.seat === this.seat && p.hand) {
+        this.myHand = p.hand;
+        this.sortHand();
+      }
     });
+
+    // 从服务端状态同步当前trick（仅在localCurrentTrick为空时，避免覆盖）
+    if (this.localCurrentTrick.length === 0 && gs.currentTrick && gs.currentTrick.length > 0) {
+      this.localCurrentTrick = gs.currentTrick.map(t => ({ seat: t.seat, cards: t.cards }));
+      this.renderTrick();
+    }
+
+    // 渲染底牌（仅庄家在扣底阶段可见）
+    const bottomInfo = document.getElementById('bottom-info');
+    if (this.bottomCards && this.bottomCards.length > 0 && gs.status === 'taking_bottom' && gs.dealer === this.seat) {
+      bottomInfo.innerHTML = `<div class="bottom-label">底牌 (${this.bottomCards.length}张)</div><div class="bottom-cards">${this.bottomCards.map(c => this.renderCardSmall(c)).join('')}</div>`;
+    } else {
+      bottomInfo.innerHTML = '';
+    }
 
     this.renderHand();
   },
@@ -459,11 +527,24 @@ const App = {
     if (phase === 'bidding') {
       document.getElementById('btn-bid').classList.toggle('hidden', !isMyTurn);
       document.getElementById('btn-confirm-trump').classList.toggle('hidden', !isMyTurn);
+      document.getElementById('btn-set-bottom').classList.add('hidden');
       document.getElementById('btn-play').classList.add('hidden');
+      document.getElementById('btn-view-bottom').classList.add('hidden');
+    } else if (phase === 'taking_bottom') {
+      document.getElementById('btn-bid').classList.add('hidden');
+      document.getElementById('btn-confirm-trump').classList.add('hidden');
+      document.getElementById('btn-set-bottom').classList.toggle('hidden', !isMyTurn);
+      document.getElementById('btn-play').classList.add('hidden');
+      document.getElementById('btn-view-bottom').classList.add('hidden');
     } else if (phase === 'playing') {
       document.getElementById('btn-bid').classList.add('hidden');
       document.getElementById('btn-confirm-trump').classList.add('hidden');
+      document.getElementById('btn-set-bottom').classList.add('hidden');
       document.getElementById('btn-play').classList.toggle('hidden', !isMyTurn);
+      // 庄家可以查看底牌
+      const isDealer = this.gameState && this.gameState.dealer === this.seat;
+      const hasBottom = this.bottomCards && this.bottomCards.length > 0;
+      document.getElementById('btn-view-bottom').classList.toggle('hidden', !(isDealer && hasBottom));
     }
   },
 
@@ -570,6 +651,21 @@ const App = {
     this.renderHand();
   },
 
+  setBottom() {
+    if (!this.gameState || this.gameState.status !== 'taking_bottom') return;
+
+    const bottomCount = this.gameState.bottomCount || 0;
+    const selected = this.myHand.filter(c => this.selectedCards.has(c.id));
+    if (selected.length !== bottomCount) {
+      this.showToast(`请选择${bottomCount}张牌作为底牌`);
+      return;
+    }
+
+    this.send({ type: 'set_bottom', cardIds: selected.map(c => c.id) });
+    this.selectedCards.clear();
+    this.renderHand();
+  },
+
   playCards() {
     if (this.selectedCards.size === 0) {
       this.showToast('请选择要出的牌');
@@ -581,18 +677,16 @@ const App = {
     this.selectedCards.clear();
   },
 
+  clearTrickArea() {
+    document.querySelectorAll('.trick-seat').forEach(el => el.innerHTML = '');
+  },
+
   renderTrick() {
-    const container = document.getElementById('trick-cards');
-    container.innerHTML = '';
-
-    const ordered = [];
-    for (let rel = 0; rel < 4; rel++) {
-      const absSeat = (this.seat + rel) % 4;
-      const play = this.localCurrentTrick.find(p => p.seat === absSeat);
-      if (play) ordered.push(play);
-    }
-
-    for (const play of ordered) {
+    for (const play of this.localCurrentTrick) {
+      const relSeat = this.getRelativeSeat(play.seat);
+      const container = document.querySelector(`.trick-seat[data-rel="${relSeat}"]`);
+      if (!container) continue;
+      container.innerHTML = '';
       for (const card of play.cards) {
         const el = document.createElement('div');
         el.className = 'card ' + this.getCardColorClass(card);
@@ -708,6 +802,76 @@ const App = {
 
   hideRules() {
     document.getElementById('rules-modal').classList.add('hidden');
+  },
+
+  renderCardSmall(card) {
+    let rankDisplay = card.rank;
+    let suitDisplay = this.SUIT_SYMBOLS[card.suit] || card.rank;
+    if (card.suit === 'joker') {
+      rankDisplay = card.rank === 'big' ? '大王' : '小王';
+      suitDisplay = '';
+    }
+    const colorClass = this.getCardColorClass(card);
+    return `<div class="card ${colorClass}">
+      <div class="suit-top">${rankDisplay}<br>${suitDisplay}</div>
+      <div class="suit-bottom">${rankDisplay}<br>${suitDisplay}</div>
+    </div>`;
+  },
+
+  showPlayedHistory() {
+    const modal = document.getElementById('history-modal');
+    const body = document.getElementById('history-body');
+    modal.classList.remove('hidden');
+
+    if (this.playedHistory.length === 0) {
+      body.innerHTML = '<p>暂无出牌记录</p>';
+      return;
+    }
+
+    let html = '';
+    for (let i = 0; i < this.playedHistory.length; i++) {
+      const trick = this.playedHistory[i];
+      html += `<div class="history-trick">`;
+      html += `<div class="history-trick-header">第${i + 1}轮 — ${this.getPlayerName(trick.winnerSeat)} 得 ${trick.points} 分</div>`;
+      html += `<div class="history-plays">`;
+      for (const play of trick.plays) {
+        html += `<div class="history-play">`;
+        html += `<div class="history-play-seat">${this.getPlayerName(play.seat)}</div>`;
+        html += `<div class="history-play-cards">`;
+        for (const card of play.cards) {
+          html += this.renderCardSmall(card);
+        }
+        html += `</div></div>`;
+      }
+      html += `</div></div>`;
+    }
+    body.innerHTML = html;
+  },
+
+  hidePlayedHistory() {
+    document.getElementById('history-modal').classList.add('hidden');
+  },
+
+  showBottomCards() {
+    const modal = document.getElementById('bottom-modal');
+    const body = document.getElementById('bottom-body');
+    modal.classList.remove('hidden');
+
+    if (!this.bottomCards || this.bottomCards.length === 0) {
+      body.innerHTML = '<p>暂无底牌</p>';
+      return;
+    }
+
+    let html = '<div class="bottom-cards">';
+    for (const card of this.bottomCards) {
+      html += this.renderCardSmall(card);
+    }
+    html += '</div>';
+    body.innerHTML = html;
+  },
+
+  hideBottomCards() {
+    document.getElementById('bottom-modal').classList.add('hidden');
   }
 };
 

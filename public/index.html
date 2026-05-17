@@ -116,6 +116,8 @@
         </div>
         <button id="btn-game-menu" class="btn small">菜单</button>
         <button id="btn-rules" class="btn small">规则</button>
+        <button id="btn-played-history" class="btn small">已出牌</button>
+        <button id="btn-view-bottom" class="btn small hidden">底牌</button>
       </div>
 
       <div class="table">
@@ -142,7 +144,10 @@
 
         <!-- 出牌区 -->
         <div id="play-area">
-          <div id="trick-cards"></div>
+          <div class="trick-seat trick-bottom" data-rel="0"></div>
+          <div class="trick-seat trick-right" data-rel="1"></div>
+          <div class="trick-seat trick-top" data-rel="2"></div>
+          <div class="trick-seat trick-left" data-rel="3"></div>
           <div id="trick-winner"></div>
         </div>
 
@@ -157,6 +162,7 @@
       <div id="game-actions">
         <button id="btn-bid" class="btn primary hidden">亮主</button>
         <button id="btn-confirm-trump" class="btn primary hidden">确认主牌</button>
+        <button id="btn-set-bottom" class="btn primary hidden">扣底</button>
         <button id="btn-play" class="btn primary hidden">出牌</button>
         <button id="btn-pass" class="btn hidden">过</button>
         <button id="btn-sort" class="btn small">理牌</button>
@@ -193,6 +199,34 @@
         </div>
         <div class="modal-body" id="rules-body">
           <p>加载中...</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 已出牌弹窗 -->
+    <div id="history-modal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>已出牌记录</h2>
+          <button id="btn-close-history" class="btn small">关闭</button>
+        </div>
+        <div class="modal-body" id="history-body">
+          <p>暂无记录</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 底牌弹窗 -->
+    <div id="bottom-modal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>本局底牌</h2>
+          <button id="btn-close-bottom" class="btn small">关闭</button>
+        </div>
+        <div class="modal-body" id="bottom-body">
+          <p>暂无底牌</p>
         </div>
       </div>
     </div>
