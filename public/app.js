@@ -362,8 +362,16 @@ const App = {
           this.selectedCards.clear();
           this.renderHand();
         }
+        // 新一轮首张牌：清空出牌区
         if (this.localCurrentTrick.length === 0) {
           this.clearTrickArea();
+        }
+        // 如果上一轮延时清空还没执行，强制清空后重新开始
+        if (this._trickClearTimer) {
+          clearTimeout(this._trickClearTimer);
+          this._trickClearTimer = null;
+          this.clearTrickArea();
+          this.localCurrentTrick = [];
         }
         this.localCurrentTrick.push({ seat: msg.seat, cards: msg.cards });
         this.renderTrick();
@@ -380,14 +388,11 @@ const App = {
             points: msg.points
           });
         }
-        // 记录当前trick的数量，1.5秒后只清空对应数量的条目
-        const trickLen = this.localCurrentTrick.length;
-        setTimeout(() => {
-          // 只清空属于上一轮的牌，如果新牌已加入则保留
-          if (this.localCurrentTrick.length <= trickLen) {
-            this.clearTrickArea();
-            this.localCurrentTrick = [];
-          }
+        // 1.5秒后清空出牌区，如果新一轮出牌先到达则取消
+        this._trickClearTimer = setTimeout(() => {
+          this._trickClearTimer = null;
+          this.clearTrickArea();
+          this.localCurrentTrick = [];
         }, 1500);
         break;
 
@@ -483,7 +488,10 @@ const App = {
     const gs = this.gameState;
     document.getElementById('trump-info').textContent = '主牌: ' + (gs.trumpSuit ? this.SUIT_NAMES[gs.trumpSuit] : '无主');
     document.getElementById('level-info').textContent = '打: ' + gs.trumpLevel;
-    document.getElementById('score-info').textContent = `得分: ${gs.scores.team1} - ${gs.scores.team2}`;
+    // 只显示闲家得分（庄家不得分）
+    const dealerTeam = gs.players[gs.dealer]?.team;
+    const idleScore = dealerTeam === 1 ? gs.scores.team2 : gs.scores.team1;
+    document.getElementById('score-info').textContent = `闲家得分: ${idleScore}分`;
 
     gs.players.forEach(p => {
       const relSeat = this.getRelativeSeat(p.seat);
@@ -804,7 +812,7 @@ const App = {
     document.getElementById('rules-modal').classList.add('hidden');
   },
 
-  renderCardSmall(card) {
+  renderCardSmall(card, extraClass = '') {
     let rankDisplay = card.rank;
     let suitDisplay = this.SUIT_SYMBOLS[card.suit] || card.rank;
     if (card.suit === 'joker') {
@@ -812,7 +820,8 @@ const App = {
       suitDisplay = '';
     }
     const colorClass = this.getCardColorClass(card);
-    return `<div class="card ${colorClass}">
+    const cls = extraClass ? `card ${colorClass} ${extraClass}` : `card ${colorClass}`;
+    return `<div class="${cls}">
       <div class="suit-top">${rankDisplay}<br>${suitDisplay}</div>
       <div class="suit-bottom">${rankDisplay}<br>${suitDisplay}</div>
     </div>`;
@@ -828,23 +837,73 @@ const App = {
       return;
     }
 
-    let html = '';
-    for (let i = 0; i < this.playedHistory.length; i++) {
-      const trick = this.playedHistory[i];
-      html += `<div class="history-trick">`;
-      html += `<div class="history-trick-header">第${i + 1}轮 — ${this.getPlayerName(trick.winnerSeat)} 得 ${trick.points} 分</div>`;
-      html += `<div class="history-plays">`;
-      for (const play of trick.plays) {
-        html += `<div class="history-play">`;
-        html += `<div class="history-play-seat">${this.getPlayerName(play.seat)}</div>`;
-        html += `<div class="history-play-cards">`;
-        for (const card of play.cards) {
-          html += this.renderCardSmall(card);
+    const deckCount = this.gameState?.deckCount || 2;
+    const suits = ['spade', 'heart', 'diamond', 'club'];
+    const ranks = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2'];
+
+    // 构建完整牌组
+    const allCards = [];
+    for (let d = 0; d < deckCount; d++) {
+      for (const suit of suits) {
+        for (const rank of ranks) {
+          allCards.push({ suit, rank, id: `${suit}_${rank}_${d}` });
         }
-        html += `</div></div>`;
       }
-      html += `</div></div>`;
+      allCards.push({ suit: 'joker', rank: 'small', id: `joker_small_${d}` });
+      allCards.push({ suit: 'joker', rank: 'big', id: `joker_big_${d}` });
     }
+
+    // 收集已出的牌的 id
+    const playedIds = new Set();
+    for (const trick of this.playedHistory) {
+      for (const play of trick.plays) {
+        for (const card of play.cards) {
+          playedIds.add(card.id);
+        }
+      }
+    }
+
+    // 按花色和大小排序（复用手牌排序逻辑）
+    const gs = this.gameState;
+    const trumpSuit = gs?.trumpSuit;
+    const trumpLevel = gs?.trumpLevel;
+
+    const isTrump = (c) => {
+      if (c.suit === 'joker') return true;
+      if (c.rank === String(trumpLevel)) return true;
+      if (trumpSuit && c.suit === trumpSuit && c.rank !== String(trumpLevel)) return true;
+      return false;
+    };
+
+    const getTrumpRank = (c) => {
+      if (c.suit === 'joker') return c.rank === 'big' ? 100 : 99;
+      if (c.rank === String(trumpLevel)) {
+        if (c.suit === trumpSuit) return 98;
+        return 97;
+      }
+      return this.RANK_ORDER.indexOf(c.rank);
+    };
+
+    allCards.sort((a, b) => {
+      const aT = isTrump(a);
+      const bT = isTrump(b);
+      if (aT && !bT) return -1;
+      if (!aT && bT) return 1;
+      if (aT && bT) return getTrumpRank(b) - getTrumpRank(a);
+
+      const suitOrder = ['spade', 'heart', 'diamond', 'club'];
+      const sDiff = suitOrder.indexOf(a.suit) - suitOrder.indexOf(b.suit);
+      if (sDiff !== 0) return sDiff;
+      return this.RANK_ORDER.indexOf(b.rank) - this.RANK_ORDER.indexOf(a.rank);
+    });
+
+    let html = `<div class="history-played-count">已出 ${playedIds.size} / ${allCards.length} 张</div>`;
+    html += `<div class="history-play-cards">`;
+    for (const card of allCards) {
+      const isPlayed = playedIds.has(card.id);
+      html += this.renderCardSmall(card, isPlayed ? '' : 'unplayed');
+    }
+    html += `</div>`;
     body.innerHTML = html;
   },
 

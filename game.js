@@ -248,36 +248,87 @@ function findWinningCard(trickPlays, trumpSuit, trumpLevel, leadSuit) {
     const curr = trickPlays[i];
     const prev = trickPlays[winner];
 
-    if (isPlayBeating(curr.cards, prev.cards, leadPattern, leadSuit, trumpSuit, trumpLevel)) {
+    if (isPlayBeating(curr.cards, prev.cards, leadCards, leadPattern, leadSuit, trumpSuit, trumpLevel)) {
       winner = i;
     }
   }
   return winner;
 }
 
-function isPlayBeating(playCards, winnerCards, leadPattern, leadSuit, trumpSuit, trumpLevel) {
-  const playIsTrump = playCards.some(c => isTrump(c, trumpSuit, trumpLevel));
-  const winnerIsTrump = winnerCards.some(c => isTrump(c, trumpSuit, trumpLevel));
+function isPlayBeating(playCards, winnerCards, leadCards, leadPattern, leadSuit, trumpSuit, trumpLevel) {
+  const leadIsTrump = isTrump(leadCards[0], trumpSuit, trumpLevel);
 
-  // 主牌 vs 非主牌
-  if (playIsTrump && !winnerIsTrump) return true;
-  if (!playIsTrump && winnerIsTrump) return false;
-
-  // 都是主牌或都不是主牌时，检查是否跟了首家的花色
+  // 判断各方出了什么类型的牌
+  // playInSuit: 跟了首家花色的牌
   const playInSuit = playCards.filter(c => {
-    if (isTrump(c, trumpSuit, trumpLevel)) return playIsTrump;
-    return c.suit === leadSuit;
+    if (leadIsTrump) return isTrump(c, trumpSuit, trumpLevel);
+    return !isTrump(c, trumpSuit, trumpLevel) && c.suit === leadSuit;
   });
   const winnerInSuit = winnerCards.filter(c => {
-    if (isTrump(c, trumpSuit, trumpLevel)) return winnerIsTrump;
-    return c.suit === leadSuit;
+    if (leadIsTrump) return isTrump(c, trumpSuit, trumpLevel);
+    return !isTrump(c, trumpSuit, trumpLevel) && c.suit === leadSuit;
   });
 
-  // 都没跟花色，先出的赢
-  if (playInSuit.length === 0 && winnerInSuit.length === 0) return false;
-  // 有一方没跟花色
-  if (playInSuit.length === 0) return false;
-  if (winnerInSuit.length === 0) return true;
+  // playTrumps: 出的主牌（将吃）— 必须匹配首家牌型才算将吃
+  const playTrumps = playCards.filter(c => isTrump(c, trumpSuit, trumpLevel) && playInSuit.indexOf(c) === -1);
+  const winnerTrumps = winnerCards.filter(c => isTrump(c, trumpSuit, trumpLevel) && winnerInSuit.indexOf(c) === -1);
+
+  const playFollowed = playInSuit.length > 0;
+  const winnerFollowed = winnerInSuit.length > 0;
+
+  // 将吃需要匹配首家的牌型：单张→单主将吃，对子→对主将吃，拖拉机→拖拉机主将吃
+  let playChopped = false;
+  let winnerChopped = false;
+  if (!playFollowed && playTrumps.length > 0) {
+    if (leadPattern.type === 'single') {
+      playChopped = true;
+    } else if (leadPattern.type === 'pair') {
+      const trumpPattern = getCardPattern(playTrumps, trumpSuit, trumpLevel);
+      playChopped = trumpPattern.type === 'pair';
+    } else if (leadPattern.type === 'tractor') {
+      const trumpPattern = getCardPattern(playTrumps, trumpSuit, trumpLevel);
+      playChopped = trumpPattern.type === 'tractor';
+    } else {
+      playChopped = true; // mix类型，有主牌就算将吃
+    }
+  }
+  if (!winnerFollowed && winnerTrumps.length > 0) {
+    if (leadPattern.type === 'single') {
+      winnerChopped = true;
+    } else if (leadPattern.type === 'pair') {
+      const trumpPattern = getCardPattern(winnerTrumps, trumpSuit, trumpLevel);
+      winnerChopped = trumpPattern.type === 'pair';
+    } else if (leadPattern.type === 'tractor') {
+      const trumpPattern = getCardPattern(winnerTrumps, trumpSuit, trumpLevel);
+      winnerChopped = trumpPattern.type === 'tractor';
+    } else {
+      winnerChopped = true;
+    }
+  }
+
+  // 优先级：跟了花色 > 将吃 > 垫牌
+  // 都没跟花色也没将吃（纯垫牌），先出的赢
+  if (!playFollowed && !playChopped && !winnerFollowed && !winnerChopped) return false;
+  // 垫牌输给跟了花色
+  if (!playFollowed && !playChopped) return false;
+  if (!winnerFollowed && !winnerChopped) return true;
+  // 将吃 vs 跟了花色：将吃赢
+  if (playChopped && winnerFollowed) return true;
+  if (winnerChopped && playFollowed) return false;
+  // 都将吃，比主牌大小
+  if (playChopped && winnerChopped) {
+    const playMax = getMaxCard(playTrumps, trumpSuit, trumpLevel, 'trump');
+    const winnerMax = getMaxCard(winnerTrumps, trumpSuit, trumpLevel, 'trump');
+    return compareCards(playMax, winnerMax, trumpSuit, trumpLevel, 'trump') > 0;
+  }
+
+  // 都跟了花色
+  // 首家出主牌时，跟主牌比主牌大小
+  if (leadIsTrump) {
+    const playMax = getMaxCard(playInSuit, trumpSuit, trumpLevel, 'trump');
+    const winnerMax = getMaxCard(winnerInSuit, trumpSuit, trumpLevel, 'trump');
+    return compareCards(playMax, winnerMax, trumpSuit, trumpLevel, 'trump') > 0;
+  }
 
   // 对于对子/拖拉机：只有跟了同类型才能赢
   if (leadPattern.type === 'pair' || leadPattern.type === 'tractor') {
@@ -287,16 +338,13 @@ function isPlayBeating(playCards, winnerCards, leadPattern, leadSuit, trumpSuit,
     const playMatchesType = playPattern.type === leadPattern.type;
     const winnerMatchesType = winnerPattern.type === leadPattern.type;
 
-    // 都跟了同类型，比最大的牌
     if (playMatchesType && winnerMatchesType) {
       const playMax = getMaxCard(playInSuit, trumpSuit, trumpLevel, leadSuit);
       const winnerMax = getMaxCard(winnerInSuit, trumpSuit, trumpLevel, leadSuit);
       return compareCards(playMax, winnerMax, trumpSuit, trumpLevel, leadSuit) > 0;
     }
-    // 只有一方跟了同类型
     if (playMatchesType && !winnerMatchesType) return true;
     if (!playMatchesType && winnerMatchesType) return false;
-    // 都没跟同类型，比最大牌
     const playMax2 = getMaxCard(playInSuit, trumpSuit, trumpLevel, leadSuit);
     const winnerMax2 = getMaxCard(winnerInSuit, trumpSuit, trumpLevel, leadSuit);
     return compareCards(playMax2, winnerMax2, trumpSuit, trumpLevel, leadSuit) > 0;

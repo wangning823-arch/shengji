@@ -117,6 +117,65 @@ function getRoomList() {
   return roomList;
 }
 
+// 自动开始下一局
+function autoStartNextGame(roomId) {
+  setTimeout(() => {
+    const room = rooms.get(roomId);
+    if (!room || room.status !== 'waiting') return;
+
+    const activePlayers = room.players.filter(p => p !== null);
+    if (activePlayers.length !== 4) return;
+
+    activePlayers.sort((a, b) => a.seat - b.seat);
+
+    const game = new GameEngine(room.id, room.deckCount, activePlayers.map(p => ({
+      userId: p.userId,
+      nickname: p.nickname,
+      avatar: p.avatar
+    })));
+
+    const dealResult = game.deal();
+    games.set(game.id, game);
+    room.gameId = game.id;
+    room.status = 'playing';
+
+    const roomAIs = roomAIPlayers.get(roomId) || {};
+    for (let seat = 0; seat < 4; seat++) {
+      if (roomAIs[seat]) {
+        roomAIs[seat].setHand(game.players[seat].hand);
+      }
+    }
+
+    for (const player of activePlayers) {
+      const gameState = game.toJSON(player.seat);
+      const hand = game.players[player.seat].hand;
+      if (player.ws) {
+        send(player.ws, {
+          type: 'game_started',
+          gameId: game.id,
+          hand,
+          dealer: game.dealer,
+          trumpLevel: game.trumpLevel,
+          seat: player.seat,
+          state: gameState
+        });
+      }
+    }
+
+    broadcast(roomId, {
+      type: 'turn_changed',
+      seat: game.currentSeat,
+      phase: 'bidding'
+    });
+
+    if (roomAIs[game.currentSeat]) {
+      setTimeout(() => {
+        handleAITurn(roomId, game, game.currentSeat);
+      }, 500);
+    }
+  }, 3000);
+}
+
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -420,6 +479,7 @@ async function handleAITurn(roomId, game, seat) {
             room.status = 'waiting';
             room.gameId = null;
           }
+          autoStartNextGame(roomId);
         } else {
           broadcast(roomId, {
             type: 'turn_changed',
@@ -906,6 +966,7 @@ const messageHandlers = {
         });
         room.status = 'waiting';
         room.gameId = null;
+        autoStartNextGame(ws.roomId);
       } else {
         let leadSuit = null;
         if (game.currentTrick.length > 0 && game.currentTrick[0].cards.length > 0) {

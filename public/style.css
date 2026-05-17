@@ -435,8 +435,8 @@ html, body {
   top: 50px;
   left: 50%;
   transform: translateX(-50%);
-  width: 320px;
-  height: 200px;
+  width: 560px;
+  height: 400px;
 }
 
 .player {
@@ -469,19 +469,19 @@ html, body {
 }
 
 .player.partner {
-  top: -10px;
+  top: -50px;
   left: 50%;
   transform: translateX(-50%);
 }
 
 .player.left {
-  left: -50px;
+  left: -110px;
   top: 50%;
   transform: translateY(-50%);
 }
 
 .player.right {
-  right: -50px;
+  right: -110px;
   top: 50%;
   transform: translateY(-50%);
 }
@@ -495,62 +495,57 @@ html, body {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 200px;
-  height: 120px;
+  width: 440px;
+  height: 320px;
 }
 
 .trick-seat {
   position: absolute;
   display: flex;
-  gap: 2px;
+  gap: 3px;
   justify-content: center;
   align-items: center;
-}
-
-.trick-seat .card {
-  width: 30px;
-  height: 42px;
-  font-size: 9px;
-  padding: 2px;
+  flex-wrap: wrap;
+  max-width: 280px;
 }
 
 .trick-bottom {
-  bottom: 2px;
+  bottom: 5px;
   left: 50%;
   transform: translateX(-50%);
 }
 
 .trick-top {
-  top: 2px;
+  top: 5px;
   left: 50%;
   transform: translateX(-50%);
 }
 
 .trick-left {
-  left: 2px;
+  left: 5px;
   top: 50%;
   transform: translateY(-50%);
-  flex-direction: column;
+  max-width: 200px;
 }
 
 .trick-right {
-  right: 2px;
+  right: 5px;
   top: 50%;
   transform: translateY(-50%);
-  flex-direction: column;
+  max-width: 200px;
 }
 
 /* 扑克牌 */
 .card {
-  width: 40px;
-  height: 56px;
+  width: 66px;
+  height: 90px;
   background: #fff;
-  border-radius: 4px;
+  border-radius: 6px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: 3px;
-  font-size: 11px;
+  padding: 5px;
+  font-size: 14px;
   font-weight: bold;
   cursor: pointer;
   user-select: none;
@@ -602,10 +597,10 @@ html, body {
   transform: translateX(-50%);
   display: flex;
   justify-content: center;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 10px;
   max-width: 95vw;
-  overflow-x: auto;
 }
 
 #my-hand .card {
@@ -731,22 +726,22 @@ html, body {
 /* 横屏优化 */
 @media (orientation: landscape) {
   .table {
-    width: 400px;
-    height: 240px;
+    width: 700px;
+    height: 460px;
   }
 
   .player.left {
-    left: -70px;
+    left: -130px;
   }
 
   .player.right {
-    right: -70px;
+    right: -130px;
   }
 
   .card {
-    width: 44px;
-    height: 62px;
-    font-size: 12px;
+    width: 66px;
+    height: 90px;
+    font-size: 14px;
   }
 
   #my-hand {
@@ -914,13 +909,6 @@ html, body {
   flex-wrap: wrap;
 }
 
-.history-play-cards .card {
-  width: 28px;
-  height: 40px;
-  font-size: 9px;
-  padding: 2px;
-}
-
 #bottom-info {
   position: absolute;
   bottom: 10px;
@@ -948,23 +936,42 @@ html, body {
   justify-content: center;
 }
 
-.bottom-cards .card {
-  width: 28px;
-  height: 40px;
-  font-size: 9px;
-  padding: 2px;
+.card.unplayed {
+  background: #ddd;
+  color: #999;
+  opacity: 0.5;
+  filter: grayscale(100%);
+  box-shadow: none;
 }
 
 /* 小屏幕 */
 @media (max-width: 360px) {
   .card {
-    width: 34px;
-    height: 48px;
-    font-size: 10px;
+    width: 66px;
+    height: 90px;
+    font-size: 14px;
   }
 
   .table {
-    width: 260px;
+    width: 460px;
+    height: 340px;
+  }
+
+  .player.partner {
+    top: -40px;
+  }
+
+  .player.left {
+    left: -90px;
+  }
+
+  .player.right {
+    right: -90px;
+  }
+
+  #play-area {
+    width: 360px;
+    height: 260px;
   }
 
   .seat-avatar {
