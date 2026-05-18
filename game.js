@@ -381,12 +381,13 @@ function getUpgradeSteps(score, totalScore, deckCount) {
 }
 
 class GameEngine {
-  constructor(roomId, deckCount = 2, players = [], dealer = 0, trumpLevel = 2) {
+  constructor(roomId, deckCount = 2, players = [], dealer = 0, trumpLevel = 2, isFirstGame = true) {
     this.id = uuidv4();
     this.roomId = roomId;
     this.deckCount = deckCount;
     this.players = players.map((p, i) => ({ ...p, seat: i, hand: [], team: i % 2 === 0 ? 1 : 2 }));
     this.dealer = dealer;
+    this.isFirstGame = isFirstGame;
     this.trumpSuit = null;
     this.trumpLevel = trumpLevel;
     this.status = 'waiting';
@@ -506,7 +507,9 @@ class GameEngine {
       }
       if (enteringBidding) {
         this.status = 'bidding';
-        this.dealer = seat;
+        if (this.isFirstGame) {
+          this.dealer = seat;
+        }
       }
       this.trumpSuit = null;
       this.bids.push({ seat, suit: null, levelCount: 0, jokers: jokerCards, cards: bidCards });
@@ -521,7 +524,9 @@ class GameEngine {
         return { success: false, reason: '首次亮主需要1张级牌+1张王' };
       }
       this.status = 'bidding';
-      this.dealer = seat;
+      if (this.isFirstGame) {
+        this.dealer = seat;
+      }
       this.trumpSuit = levelCards[0].suit;
       this.bids.push({ seat, suit: levelCards[0].suit, levelCount: levelCards.length, jokers: jokerCards, cards: bidCards });
       this.currentSeat = (this.currentSeat + 1) % 4;
@@ -609,6 +614,11 @@ class GameEngine {
     const trumpLevelStr = String(this.trumpLevel);
     const existingBid = this.bids.length > 0 ? this.bids[this.bids.length - 1] : null;
 
+    // 检查自己是否已经亮过主（不能自己反自己的主）
+    if (existingBid && existingBid.seat === seat) {
+      return false;
+    }
+
     const levelCards = player.hand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
     const jokerCards = player.hand.filter(c => c.suit === 'joker');
 
@@ -652,6 +662,12 @@ class GameEngine {
 
     const player = this.players[seat];
     const existingBid = this.bids[this.bids.length - 1];
+
+    // 检查自己是否已经反过主（不能自己反自己的主）
+    if (existingBid.seat === seat) {
+      return false;
+    }
+
     const trumpLevelStr = String(this.trumpLevel);
 
     const levelCards = player.hand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');

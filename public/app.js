@@ -323,7 +323,6 @@ const App = {
       case 'cards_dealt':
         this.myHand = msg.hand || [];
         this.sortHand();
-        this.updateGameUI();
         break;
 
       case 'game_state':
@@ -415,16 +414,19 @@ const App = {
           clearTimeout(this._trickClearTimer);
           this._trickClearTimer = null;
         }
-        const dealerWon = msg.idleScore <= 75;
-        let endMsg = `本局结束！${dealerWon ? '庄家胜' : '闲家胜'}`;
-        if (msg.bottomPoints > 0) {
-          endMsg += `，底牌${msg.bottomPoints}分`;
-          if (msg.bottomMultiplier > 1) {
-            endMsg += `(翻${msg.bottomMultiplier}倍)`;
+        // 延迟显示结果，让用户看到最后一墩的牌
+        setTimeout(() => {
+          const dealerWon = msg.idleScore <= 75;
+          let endMsg = `本局结束！${dealerWon ? '庄家胜' : '闲家胜'}`;
+          if (msg.bottomPoints > 0) {
+            endMsg += `，底牌${msg.bottomPoints}分`;
+            if (msg.bottomMultiplier > 1) {
+              endMsg += `(翻${msg.bottomMultiplier}倍)`;
+            }
           }
-        }
-        endMsg += `，${msg.levels.team1} : ${msg.levels.team2}`;
-        this.showToast(endMsg);
+          endMsg += `，${msg.levels.team1} : ${msg.levels.team2}`;
+          this.showToast(endMsg);
+        }, 1500);
         this.bottomCards = [];
         document.getElementById('btn-view-bottom').classList.add('hidden');
         break;
@@ -544,6 +546,17 @@ const App = {
       if (el) {
         el.querySelector('.player-name').textContent = p.userId === this.user?.id ? '我' : p.nickname;
         el.querySelector('.player-cards-count').textContent = p.handCount + '张';
+        // 显示庄家/闲家标记
+        const roleEl = el.querySelector('.player-role');
+        if (roleEl) {
+          if (gs.dealer === p.seat) {
+            roleEl.textContent = '庄';
+            roleEl.className = 'player-role dealer';
+          } else {
+            roleEl.textContent = '闲';
+            roleEl.className = 'player-role idle';
+          }
+        }
       }
       // 如果服务端传了手牌，更新本地手牌
       if (p.seat === this.seat && p.hand) {
@@ -557,6 +570,7 @@ const App = {
       const isMyTurn = gs.currentSeat === this.seat;
       const canBidNow = isMyTurn && this.canBid();
       document.getElementById('btn-bid').classList.toggle('hidden', !canBidNow);
+      document.getElementById('btn-pass').classList.toggle('hidden', !canBidNow);
     }
 
     // 从服务端状态同步当前trick（仅在localCurrentTrick为空时，避免覆盖）
@@ -576,7 +590,7 @@ const App = {
     this.renderHand();
   },
 
-  updateTurn(seat, phase) {
+  updateTurn(seat, phase, rebidPhase) {
     document.querySelectorAll('.player').forEach(p => p.classList.remove('active'));
     const relSeat = this.getRelativeSeat(seat);
     const el = document.querySelector(`.player[data-seat="${relSeat}"]`);
@@ -598,7 +612,8 @@ const App = {
         document.getElementById('btn-bid').classList.toggle('hidden', !canBidNow);
         document.getElementById('btn-bid').textContent = '亮主';
         document.getElementById('btn-pass-rebid').classList.add('hidden');
-        document.getElementById('btn-pass').classList.toggle('hidden', !isMyTurn);
+        // 只有能亮主时才显示跳过按钮，不能亮主时服务器会自动跳过
+        document.getElementById('btn-pass').classList.toggle('hidden', !canBidNow);
       }
       document.getElementById('btn-set-bottom').classList.add('hidden');
       document.getElementById('btn-play').classList.add('hidden');
@@ -725,6 +740,11 @@ const App = {
     const trumpLevelStr = String(this.gameState.trumpLevel);
     const existingBid = this.gameState.bids && this.gameState.bids.length > 0 ? this.gameState.bids[this.gameState.bids.length - 1] : null;
 
+    // 检查自己是否已经亮过主（不能自己反自己的主）
+    if (existingBid && existingBid.seat === this.seat) {
+      return false;
+    }
+
     // 从手牌中分类
     const levelCards = this.myHand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
     const jokerCards = this.myHand.filter(c => c.suit === 'joker');
@@ -772,6 +792,11 @@ const App = {
     const trumpLevelStr = String(this.gameState.trumpLevel);
     const existingBid = this.gameState.bids[this.gameState.bids.length - 1];
 
+    // 检查自己是否已经反过主（不能自己反自己的主）
+    if (existingBid.seat === this.seat) {
+      return false;
+    }
+
     const levelCards = this.myHand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
     const jokerCards = this.myHand.filter(c => c.suit === 'joker');
 
@@ -800,9 +825,9 @@ const App = {
       return;
     }
 
-    // 反主阶段发送 rebid 消息
-    const isRebidPhase = this.gameState.currentSeat === this.seat && this.canRebid() && this.gameState.bids && this.gameState.bids.length > 0;
-    const messageType = isRebidPhase ? 'rebid' : 'bid';
+    // 根据按钮文本来判断是亮主还是反主
+    const btnText = document.getElementById('btn-bid').textContent;
+    const messageType = btnText === '反主' ? 'rebid' : 'bid';
 
     this.send({ type: messageType, cards: selected.map(c => ({ id: c.id, suit: c.suit, rank: c.rank })) });
     this.selectedCards.clear();

@@ -650,7 +650,8 @@ function autoStartNextGame(roomId) {
         avatar: p.avatar
       })),
       room.nextDealer ?? 0,
-      room.nextTrumpLevel ?? 2
+      room.nextTrumpLevel ?? 2,
+      !room.nextDealer
     );
 
     startGameWithDealing(room, game, roomId);
@@ -1273,7 +1274,8 @@ const messageHandlers = {
         avatar: p.avatar
       })),
       room.nextDealer ?? 0,
-      room.nextTrumpLevel ?? 2
+      room.nextTrumpLevel ?? 2,
+      !room.nextDealer
     );
 
     startGameWithDealing(room, game, ws.roomId);

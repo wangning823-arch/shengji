@@ -289,6 +289,70 @@ function selectLeadPlay(hand, gameState, seat, team, cardTracker) {
 }
 
 /**
+ * 从手牌中找出所有对子（同rank同花色的两张牌）
+ */
+function findPairs(cards) {
+  const groups = {};
+  for (const c of cards) {
+    const key = `${c.suit}_${c.rank}`;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(c);
+  }
+  const pairs = [];
+  for (const key in groups) {
+    if (groups[key].length >= 2) {
+      pairs.push([groups[key][0], groups[key][1]]);
+    }
+  }
+  return pairs;
+}
+
+/**
+ * 从手牌中找出拖拉机（同花色连续对子）
+ */
+function findTractors(cards, trumpSuit, trumpLevel) {
+  const pairs = findPairs(cards);
+  if (pairs.length < 2) return [];
+
+  // 按花色分组
+  const suitGroups = {};
+  for (const pair of pairs) {
+    const suit = pair[0].suit;
+    if (!suitGroups[suit]) suitGroups[suit] = [];
+    suitGroups[suit].push(pair);
+  }
+
+  const tractors = [];
+  for (const suit in suitGroups) {
+    const suitPairs = suitGroups[suit];
+    if (suitPairs.length < 2) continue;
+
+    // 按rank排序
+    suitPairs.sort((a, b) => RANK_ORDER[a[0].rank] - RANK_ORDER[b[0].rank]);
+
+    // 找连续对子
+    let current = [suitPairs[0]];
+    for (let i = 1; i < suitPairs.length; i++) {
+      const prevRank = RANK_ORDER[current[current.length - 1][0].rank];
+      const currRank = RANK_ORDER[suitPairs[i][0].rank];
+      if (currRank - prevRank === 1) {
+        current.push(suitPairs[i]);
+      } else {
+        if (current.length >= 2) {
+          tractors.push(current.flat());
+        }
+        current = [suitPairs[i]];
+      }
+    }
+    if (current.length >= 2) {
+      tractors.push(current.flat());
+    }
+  }
+
+  return tractors;
+}
+
+/**
  * 确保跟牌数量与首家出牌数量一致
  */
 function ensureCorrectPlayCount(cards, hand, leadCards, trumpSuit, trumpLevel) {
@@ -299,6 +363,7 @@ function ensureCorrectPlayCount(cards, hand, leadCards, trumpSuit, trumpLevel) {
   const leadCount = leadCards.length;
   const leadIsTrump = isTrump(leadCards[0], trumpSuit, trumpLevel);
   const leadSuit = leadCards[0].suit;
+  const leadPattern = getCardPattern(leadCards, trumpSuit, trumpLevel);
   const playedIds = new Set(cards.map(c => c.id));
 
   // 剩余手牌
@@ -310,22 +375,69 @@ function ensureCorrectPlayCount(cards, hand, leadCards, trumpSuit, trumpLevel) {
     return !isTrump(c, trumpSuit, trumpLevel) && c.suit === leadSuit;
   });
 
-  // 其他牌
-  const otherRemaining = remaining.filter(c => !sameSuitRemaining.some(s => s.id === c.id));
+  // 其他牌：分非主牌和主牌，优先用非主牌
+  const otherNonTrump = remaining.filter(c =>
+    !sameSuitRemaining.some(s => s.id === c.id) && !isTrump(c, trumpSuit, trumpLevel)
+  );
+  const otherTrump = remaining.filter(c =>
+    !sameSuitRemaining.some(s => s.id === c.id) && isTrump(c, trumpSuit, trumpLevel)
+  );
 
   // 按牌力排序（弱的优先）
   sameSuitRemaining.sort((a, b) =>
     evaluateCardValue(a, trumpSuit, trumpLevel) -
     evaluateCardValue(b, trumpSuit, trumpLevel)
   );
-  otherRemaining.sort((a, b) =>
+  otherNonTrump.sort((a, b) =>
+    evaluateCardValue(a, trumpSuit, trumpLevel) -
+    evaluateCardValue(b, trumpSuit, trumpLevel)
+  );
+  otherTrump.sort((a, b) =>
     evaluateCardValue(a, trumpSuit, trumpLevel) -
     evaluateCardValue(b, trumpSuit, trumpLevel)
   );
 
+  // 如果首家出对牌或拖拉机，优先用同花色对牌补齐
+  if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && cards.length < leadCount) {
+    const result = [...cards];
+    // 按rank分组找对子
+    const groups = {};
+    for (const c of sameSuitRemaining) {
+      if (!groups[c.rank]) groups[c.rank] = [];
+      groups[c.rank].push(c);
+    }
+    // 优先找和已出牌同rank的对子（保持同rank对牌）
+    const playedRanks = {};
+    for (const c of cards) {
+      if (!playedRanks[c.rank]) playedRanks[c.rank] = 0;
+      playedRanks[c.rank]++;
+    }
+    for (const rank in playedRanks) {
+      if (playedRanks[rank] === 1 && groups[rank] && groups[rank].length >= 1) {
+        result.push(groups[rank][0]);
+        if (result.length >= leadCount) return result;
+      }
+    }
+    // 找任意对子补齐
+    for (const rank in groups) {
+      if (groups[rank].length >= 2) {
+        for (let i = 0; i < groups[rank].length && result.length < leadCount; i++) {
+          result.push(groups[rank][i]);
+        }
+        if (result.length >= leadCount) return result;
+      }
+    }
+    // 找不到对子，用同花色牌补齐（降级为mix，但至少跟了花色）
+    for (const c of sameSuitRemaining) {
+      if (result.length >= leadCount) break;
+      result.push(c);
+    }
+    if (result.length >= leadCount) return result;
+  }
+
   const result = [...cards];
-  // 先补同花色，再补其他牌
-  for (const c of [...sameSuitRemaining, ...otherRemaining]) {
+  // 先补同花色，再补非主牌，最后补主牌
+  for (const c of [...sameSuitRemaining, ...otherNonTrump, ...otherTrump]) {
     if (result.length >= leadCount) break;
     result.push(c);
   }
@@ -387,6 +499,7 @@ function selectFollowPlay(hand, leadCards, gameState, seat, team, cardTracker) {
  */
 function selectTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis) {
   const candidates = [];
+  const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
 
   // 如果有同花色，跟最小的
   if (sameSuitCards.length > 0) {
@@ -395,12 +508,28 @@ function selectTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
       evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
     );
 
+    // 如果首家出对牌，优先跟对牌
+    if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+      const pairs = findPairs(sameSuitCards);
+      if (pairs.length > 0) {
+        pairs.sort((a, b) =>
+          evaluateCardValue(a[0], gameState.trumpSuit, gameState.trumpLevel) -
+          evaluateCardValue(b[0], gameState.trumpSuit, gameState.trumpLevel)
+        );
+        candidates.push({
+          cards: pairs[0],
+          score: 88,
+          reason: '跟最小对牌给队友'
+        });
+      }
+    }
+
     // 优先跟分牌（让队友得分）
     const pointCards = sameSuitCards.filter(c => POINT_CARDS[c.rank]);
     if (pointCards.length > 0) {
       candidates.push({
         cards: [pointCards[0]],
-        score: 90,
+        score: 85,
         reason: '跟分牌给队友'
       });
     }
@@ -408,7 +537,7 @@ function selectTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
     // 跟最小的牌
     candidates.push({
       cards: [sameSuitCards[0]],
-      score: 85,
+      score: 80,
       reason: '跟最小牌'
     });
   } else {
@@ -457,6 +586,74 @@ function selectTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
  */
 function selectTeammateLosingPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis) {
   const candidates = [];
+  const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
+
+  // 如果首家出拖拉机，优先考虑拖拉机
+  if (leadPattern.type === 'tractor' && sameSuitCards.length >= 4) {
+    const tractors = findTractors(sameSuitCards, gameState.trumpSuit, gameState.trumpLevel);
+    const leadSuit = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel) ? 'trump' : leadCards[0].suit;
+
+    for (const tractor of tractors) {
+      if (tractor.length < leadCards.length) continue;
+      const canWin = isPlayBeating(
+        tractor.slice(0, leadCards.length),
+        leadCards,
+        leadCards,
+        leadPattern,
+        leadSuit,
+        gameState.trumpSuit,
+        gameState.trumpLevel
+      );
+
+      const tractorValue = evaluateCardValue(tractor[0], gameState.trumpSuit, gameState.trumpLevel);
+      if (canWin) {
+        candidates.push({
+          cards: tractor.slice(0, leadCards.length),
+          score: 75 + tractorValue,
+          reason: '拖拉机管住对手'
+        });
+      } else {
+        candidates.push({
+          cards: tractor.slice(0, leadCards.length),
+          score: 45 + tractorValue,
+          reason: '拖拉机跟牌'
+        });
+      }
+    }
+  }
+
+  // 如果首家出对牌或拖拉机，考虑对牌
+  if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+    const pairs = findPairs(sameSuitCards);
+    const leadSuit = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel) ? 'trump' : leadCards[0].suit;
+
+    for (const pair of pairs) {
+      const canWin = isPlayBeating(
+        pair,
+        leadCards,
+        leadCards,
+        leadPattern,
+        leadSuit,
+        gameState.trumpSuit,
+        gameState.trumpLevel
+      );
+
+      const pairValue = evaluateCardValue(pair[0], gameState.trumpSuit, gameState.trumpLevel);
+      if (canWin) {
+        candidates.push({
+          cards: pair,
+          score: 70 + pairValue,
+          reason: '对牌管住对手'
+        });
+      } else {
+        candidates.push({
+          cards: pair,
+          score: 40 + pairValue,
+          reason: '对牌跟牌'
+        });
+      }
+    }
+  }
 
   if (sameSuitCards.length > 0) {
     // 找出能管住当前赢家的牌
@@ -533,8 +730,25 @@ function selectTeammateLosingPlay(hand, leadCards, sameSuitCards, otherCards, ga
  */
 function selectOpponentLeadingButTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis) {
   const candidates = [];
+  const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
 
   if (sameSuitCards.length > 0) {
+    // 如果首家出对牌，跟最小的对牌
+    if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+      const pairs = findPairs(sameSuitCards);
+      if (pairs.length > 0) {
+        pairs.sort((a, b) =>
+          evaluateCardValue(a[0], gameState.trumpSuit, gameState.trumpLevel) -
+          evaluateCardValue(b[0], gameState.trumpSuit, gameState.trumpLevel)
+        );
+        candidates.push({
+          cards: pairs[0],
+          score: 80,
+          reason: '跟最小对牌保护队友'
+        });
+      }
+    }
+
     // 跟最小的牌，不要出比队友大的牌
     sameSuitCards.sort((a, b) =>
       evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
@@ -543,7 +757,7 @@ function selectOpponentLeadingButTeammateWinningPlay(hand, leadCards, sameSuitCa
 
     candidates.push({
       cards: [sameSuitCards[0]],
-      score: 80,
+      score: 75,
       reason: '跟最小牌保护队友'
     });
   } else {
@@ -575,6 +789,74 @@ function selectOpponentLeadingButTeammateWinningPlay(hand, leadCards, sameSuitCa
  */
 function selectOpponentWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis) {
   const candidates = [];
+  const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
+
+  // 如果首家出拖拉机，优先考虑拖拉机
+  if (leadPattern.type === 'tractor' && sameSuitCards.length >= 4) {
+    const tractors = findTractors(sameSuitCards, gameState.trumpSuit, gameState.trumpLevel);
+    const leadSuit = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel) ? 'trump' : leadCards[0].suit;
+
+    for (const tractor of tractors) {
+      if (tractor.length < leadCards.length) continue;
+      const canWin = isPlayBeating(
+        tractor.slice(0, leadCards.length),
+        leadCards,
+        leadCards,
+        leadPattern,
+        leadSuit,
+        gameState.trumpSuit,
+        gameState.trumpLevel
+      );
+
+      const tractorValue = evaluateCardValue(tractor[0], gameState.trumpSuit, gameState.trumpLevel);
+      if (canWin) {
+        candidates.push({
+          cards: tractor.slice(0, leadCards.length),
+          score: 95 + tractorValue,
+          reason: '拖拉机管住对手'
+        });
+      } else {
+        candidates.push({
+          cards: tractor.slice(0, leadCards.length),
+          score: 35 + tractorValue,
+          reason: '拖拉机跟牌'
+        });
+      }
+    }
+  }
+
+  // 如果首家出对牌或拖拉机，考虑对牌
+  if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+    const pairs = findPairs(sameSuitCards);
+    const leadSuit = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel) ? 'trump' : leadCards[0].suit;
+
+    for (const pair of pairs) {
+      const canWin = isPlayBeating(
+        pair,
+        leadCards,
+        leadCards,
+        leadPattern,
+        leadSuit,
+        gameState.trumpSuit,
+        gameState.trumpLevel
+      );
+
+      const pairValue = evaluateCardValue(pair[0], gameState.trumpSuit, gameState.trumpLevel);
+      if (canWin) {
+        candidates.push({
+          cards: pair,
+          score: 90 + pairValue,
+          reason: '对牌管住对手'
+        });
+      } else {
+        candidates.push({
+          cards: pair,
+          score: 30 + pairValue,
+          reason: '对牌跟牌'
+        });
+      }
+    }
+  }
 
   if (sameSuitCards.length > 0) {
     // 找出能管住当前赢家的牌
@@ -664,11 +946,26 @@ function selectOpponentWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
  * 默认跟牌策略
  */
 function selectDefaultFollowPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis) {
+  const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
+
   if (sameSuitCards.length > 0) {
     sameSuitCards.sort((a, b) =>
       evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
       evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
     );
+
+    // 如果首家出对牌，优先跟对牌
+    if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+      const pairs = findPairs(sameSuitCards);
+      if (pairs.length > 0) {
+        pairs.sort((a, b) =>
+          evaluateCardValue(a[0], gameState.trumpSuit, gameState.trumpLevel) -
+          evaluateCardValue(b[0], gameState.trumpSuit, gameState.trumpLevel)
+        );
+        return pairs[0];
+      }
+    }
+
     return [sameSuitCards[0]];
   }
 
