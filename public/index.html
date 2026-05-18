@@ -113,6 +113,7 @@
           <span id="trump-info">主牌: ?</span>
           <span id="level-info">打: 2</span>
           <span id="score-info">得分: 0 - 0</span>
+          <span id="bid-info"></span>
         </div>
         <button id="btn-game-menu" class="btn small">菜单</button>
         <button id="btn-rules" class="btn small">规则</button>
@@ -209,7 +210,10 @@
       <div class="modal-content">
         <div class="modal-header">
           <h2>已出牌记录</h2>
-          <button id="btn-close-history" class="btn small">关闭</button>
+          <div>
+            <button id="btn-toggle-history-view" class="btn small">切换: 轮次记录</button>
+            <button id="btn-close-history" class="btn small">关闭</button>
+          </div>
         </div>
         <div class="modal-body" id="history-body">
           <p>暂无记录</p>

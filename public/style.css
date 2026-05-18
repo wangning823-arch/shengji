@@ -428,6 +428,16 @@ html, body {
 .game-info {
   display: flex;
   gap: 15px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+#bid-info {
+  color: #ffd700;
+  font-size: 12px;
+  background: rgba(0,0,0,0.4);
+  padding: 2px 8px;
+  border-radius: 4px;
 }
 
 .table {

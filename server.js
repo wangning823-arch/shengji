@@ -128,11 +128,15 @@ function autoStartNextGame(roomId) {
 
     activePlayers.sort((a, b) => a.seat - b.seat);
 
-    const game = new GameEngine(room.id, room.deckCount, activePlayers.map(p => ({
-      userId: p.userId,
-      nickname: p.nickname,
-      avatar: p.avatar
-    })));
+    const game = new GameEngine(
+      room.id, room.deckCount, activePlayers.map(p => ({
+        userId: p.userId,
+        nickname: p.nickname,
+        avatar: p.avatar
+      })),
+      room.nextDealer ?? 0,
+      room.nextTrumpLevel ?? 2
+    );
 
     const dealResult = game.deal();
     games.set(game.id, game);
@@ -294,10 +298,12 @@ async function handleAITurn(roomId, game, seat) {
     const gameState = game.toJSON(seat);
 
     if (game.status === 'bidding' && game.currentSeat === seat) {
+      let bidSuccess = false;
       const bidCards = await aiPlayer.decideBid(gameState);
       if (bidCards) {
         const result = game.bid(seat, bidCards);
         if (result.success) {
+          bidSuccess = true;
           broadcast(roomId, {
             type: 'bid_made',
             seat,
@@ -310,8 +316,23 @@ async function handleAITurn(roomId, game, seat) {
           });
         }
       }
-      // 检查叫主之后是否还需要继续处理
-      if (game.status === 'bidding' && game.currentSeat === seat) {
+      // AI 没有亮主成功，执行 pass
+      if (!bidSuccess) {
+        const passResult = game.passBid(seat);
+        if (passResult.success) {
+          broadcast(roomId, {
+            type: 'turn_changed',
+            seat: game.currentSeat,
+            phase: 'bidding'
+          });
+          broadcast(roomId, {
+            type: 'game_state',
+            state: game.toJSON()
+          });
+        }
+      }
+      // 检查叫主轮次是否结束（转完一圈）
+      if (game.status === 'bidding' && game.currentSeat === game.bidRoundStartSeat) {
         await new Promise(r => setTimeout(r, 500));
         const confirmResult = game.confirmTrump();
         broadcast(roomId, {
@@ -478,6 +499,8 @@ async function handleAITurn(roomId, game, seat) {
           if (room) {
             room.status = 'waiting';
             room.gameId = null;
+            room.nextDealer = result.nextDealer;
+            room.nextTrumpLevel = result.nextTrumpLevel;
           }
           autoStartNextGame(roomId);
         } else {
@@ -758,11 +781,15 @@ const messageHandlers = {
     // 按座位号排序，确保 GameEngine 内部索引与房间座位一致
     activePlayers.sort((a, b) => a.seat - b.seat);
 
-    const game = new GameEngine(room.id, room.deckCount, activePlayers.map(p => ({
-      userId: p.userId,
-      nickname: p.nickname,
-      avatar: p.avatar
-    })));
+    const game = new GameEngine(
+      room.id, room.deckCount, activePlayers.map(p => ({
+        userId: p.userId,
+        nickname: p.nickname,
+        avatar: p.avatar
+      })),
+      room.nextDealer ?? 0,
+      room.nextTrumpLevel ?? 2
+    );
 
     const dealResult = game.deal();
     games.set(game.id, game);
@@ -821,6 +848,11 @@ const messageHandlers = {
         cards: msg.cards
       });
       broadcast(ws.roomId, {
+        type: 'turn_changed',
+        seat: game.currentSeat,
+        phase: 'bidding'
+      });
+      broadcast(ws.roomId, {
         type: 'game_state',
         state: game.toJSON()
       });
@@ -830,6 +862,68 @@ const messageHandlers = {
         setTimeout(() => {
           handleAITurn(ws.roomId, game, game.currentSeat);
         }, 200);
+      }
+    } else {
+      send(ws, { type: 'error', message: result.reason });
+    }
+  },
+
+  pass_bid(ws, msg) {
+    if (!ws.roomId) return;
+    const room = rooms.get(ws.roomId);
+    if (!room || !room.gameId) return;
+    const game = games.get(room.gameId);
+    if (!game) return;
+
+    const result = game.passBid(ws.seat);
+    if (result.success) {
+      broadcast(ws.roomId, {
+        type: 'turn_changed',
+        seat: game.currentSeat,
+        phase: 'bidding'
+      });
+      broadcast(ws.roomId, {
+        type: 'game_state',
+        state: game.toJSON()
+      });
+
+      // 转完一圈，自动确认主牌
+      if (game.status === 'bidding' && game.currentSeat === game.bidRoundStartSeat) {
+        const confirmResult = game.confirmTrump();
+        broadcast(ws.roomId, {
+          type: 'trump_confirmed',
+          trumpSuit: confirmResult.trumpSuit,
+          trumpLevel: game.trumpLevel,
+          dealer: game.dealer
+        });
+        broadcast(ws.roomId, {
+          type: 'bottom_taken',
+          dealer: game.dealer,
+          bottomCount: confirmResult.bottomCount
+        });
+        broadcast(ws.roomId, {
+          type: 'turn_changed',
+          seat: game.currentSeat,
+          phase: 'taking_bottom'
+        });
+        broadcast(ws.roomId, {
+          type: 'game_state',
+          state: game.toJSON()
+        });
+        const dealerPlayer = room.players[game.dealer];
+        if (dealerPlayer && dealerPlayer.ws) {
+          send(dealerPlayer.ws, {
+            type: 'game_state',
+            state: game.toJSON(game.dealer)
+          });
+        }
+      } else {
+        const roomAIs = roomAIPlayers.get(ws.roomId) || {};
+        if (game.status === 'bidding' && roomAIs[game.currentSeat]) {
+          setTimeout(() => {
+            handleAITurn(ws.roomId, game, game.currentSeat);
+          }, 200);
+        }
       }
     } else {
       send(ws, { type: 'error', message: result.reason });
@@ -966,6 +1060,8 @@ const messageHandlers = {
         });
         room.status = 'waiting';
         room.gameId = null;
+        room.nextDealer = result.nextDealer;
+        room.nextTrumpLevel = result.nextTrumpLevel;
         autoStartNextGame(ws.roomId);
       } else {
         let leadSuit = null;

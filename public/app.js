@@ -17,6 +17,7 @@ const App = {
   RANK_ORDER: ['3','4','5','6','7','8','9','10','J','Q','K','A','2'],
   localCurrentTrick: [],
   playedHistory: [],
+  historyViewMode: 'all', // 'all' | 'rounds'
 
   SEAT_LABELS: ['北', '东', '南', '西'],
 
@@ -125,7 +126,7 @@ const App = {
     document.getElementById('btn-bid').onclick = () => this.bid();
     document.getElementById('btn-confirm-trump').onclick = () => this.send({ type: 'confirm_trump' });
     document.getElementById('btn-sort').onclick = () => this.sortHand();
-    document.getElementById('btn-pass').onclick = () => {};
+    document.getElementById('btn-pass').onclick = () => this.send({ type: 'pass_bid' });
 
     document.getElementById('btn-toggle-chat').onclick = () => this.toggleChat();
     document.getElementById('btn-send-chat').onclick = () => this.sendChat();
@@ -139,6 +140,7 @@ const App = {
     document.getElementById('btn-set-bottom').onclick = () => this.setBottom();
     document.getElementById('btn-played-history').onclick = () => this.showPlayedHistory();
     document.getElementById('btn-close-history').onclick = () => this.hidePlayedHistory();
+    document.getElementById('btn-toggle-history-view').onclick = () => this.toggleHistoryView();
 
     document.getElementById('btn-view-bottom').onclick = () => this.showBottomCards();
     document.getElementById('btn-close-bottom').onclick = () => this.hideBottomCards();
@@ -397,6 +399,11 @@ const App = {
         break;
 
       case 'game_ended':
+        // 取消 trick 清空定时器，让最后一轮出牌保持可见
+        if (this._trickClearTimer) {
+          clearTimeout(this._trickClearTimer);
+          this._trickClearTimer = null;
+        }
         const dealerWon = msg.idleScore <= 75;
         let endMsg = `本局结束！${dealerWon ? '庄家胜' : '闲家胜'}`;
         if (msg.bottomPoints > 0) {
@@ -493,6 +500,33 @@ const App = {
     const idleScore = dealerTeam === 1 ? gs.scores.team2 : gs.scores.team1;
     document.getElementById('score-info').textContent = `闲家得分: ${idleScore}分`;
 
+    // 显示当前 bids 信息（亮主阶段）
+    const bidInfo = document.getElementById('bid-info');
+    if (gs.status === 'bidding' && gs.bids && gs.bids.length > 0) {
+      const lastBid = gs.bids[gs.bids.length - 1];
+      const bidderName = this.getPlayerName(lastBid.seat);
+      const suitName = lastBid.suit === null ? '无主' : this.SUIT_NAMES[lastBid.suit];
+      const levelCount = lastBid.levelCount || 0;
+      const jokerCount = lastBid.jokers ? lastBid.jokers.length : 0;
+      let bidText = `${bidderName} 亮 ${suitName}`;
+      if (levelCount > 0) bidText += ` ${levelCount}张级牌`;
+      if (jokerCount > 0) {
+        const bigJokers = lastBid.jokers.filter(j => j.rank === 'big').length;
+        const smallJokers = jokerCount - bigJokers;
+        const jokerDesc = [];
+        if (bigJokers > 0) jokerDesc.push(`${bigJokers}大王`);
+        if (smallJokers > 0) jokerDesc.push(`${smallJokers}小王`);
+        bidText += ` +${jokerDesc.join('')}`;
+      }
+      bidInfo.textContent = bidText;
+      bidInfo.classList.remove('hidden');
+    } else if (gs.status === 'bidding') {
+      bidInfo.textContent = '尚未亮主';
+      bidInfo.classList.remove('hidden');
+    } else {
+      bidInfo.classList.add('hidden');
+    }
+
     gs.players.forEach(p => {
       const relSeat = this.getRelativeSeat(p.seat);
       const el = document.querySelector(`.player[data-seat="${relSeat}"]`);
@@ -534,18 +568,21 @@ const App = {
 
     if (phase === 'bidding') {
       document.getElementById('btn-bid').classList.toggle('hidden', !isMyTurn);
+      document.getElementById('btn-pass').classList.toggle('hidden', !isMyTurn);
       document.getElementById('btn-confirm-trump').classList.toggle('hidden', !isMyTurn);
       document.getElementById('btn-set-bottom').classList.add('hidden');
       document.getElementById('btn-play').classList.add('hidden');
       document.getElementById('btn-view-bottom').classList.add('hidden');
     } else if (phase === 'taking_bottom') {
       document.getElementById('btn-bid').classList.add('hidden');
+      document.getElementById('btn-pass').classList.add('hidden');
       document.getElementById('btn-confirm-trump').classList.add('hidden');
       document.getElementById('btn-set-bottom').classList.toggle('hidden', !isMyTurn);
       document.getElementById('btn-play').classList.add('hidden');
       document.getElementById('btn-view-bottom').classList.add('hidden');
     } else if (phase === 'playing') {
       document.getElementById('btn-bid').classList.add('hidden');
+      document.getElementById('btn-pass').classList.add('hidden');
       document.getElementById('btn-confirm-trump').classList.add('hidden');
       document.getElementById('btn-set-bottom').classList.add('hidden');
       document.getElementById('btn-play').classList.toggle('hidden', !isMyTurn);
@@ -615,8 +652,9 @@ const App = {
 
     const isTrump = (c) => {
       if (c.suit === 'joker') return true;
+      if (c.rank === '2') return true;
       if (c.rank === String(trumpLevel)) return true;
-      if (trumpSuit && c.suit === trumpSuit && c.rank !== String(trumpLevel)) return true;
+      if (trumpSuit && c.suit === trumpSuit && c.rank !== String(trumpLevel) && c.rank !== '2') return true;
       return false;
     };
 
@@ -625,6 +663,10 @@ const App = {
       if (c.rank === String(trumpLevel)) {
         if (c.suit === trumpSuit) return 98;
         return 97;
+      }
+      if (c.rank === '2' && String(trumpLevel) !== '2') {
+        if (c.suit === trumpSuit) return 96;
+        return 95;
       }
       return this.RANK_ORDER.indexOf(c.rank);
     };
@@ -827,13 +869,28 @@ const App = {
     </div>`;
   },
 
+  toggleHistoryView() {
+    this.historyViewMode = this.historyViewMode === 'all' ? 'rounds' : 'all';
+    this.showPlayedHistory();
+  },
+
   showPlayedHistory() {
     const modal = document.getElementById('history-modal');
     const body = document.getElementById('history-body');
+    const toggleBtn = document.getElementById('btn-toggle-history-view');
     modal.classList.remove('hidden');
+
+    if (toggleBtn) {
+      toggleBtn.textContent = this.historyViewMode === 'all' ? '切换: 轮次记录' : '切换: 全部牌';
+    }
 
     if (this.playedHistory.length === 0) {
       body.innerHTML = '<p>暂无出牌记录</p>';
+      return;
+    }
+
+    if (this.historyViewMode === 'rounds') {
+      this._renderHistoryRounds(body);
       return;
     }
 
@@ -870,8 +927,9 @@ const App = {
 
     const isTrump = (c) => {
       if (c.suit === 'joker') return true;
+      if (c.rank === '2') return true;
       if (c.rank === String(trumpLevel)) return true;
-      if (trumpSuit && c.suit === trumpSuit && c.rank !== String(trumpLevel)) return true;
+      if (trumpSuit && c.suit === trumpSuit && c.rank !== String(trumpLevel) && c.rank !== '2') return true;
       return false;
     };
 
@@ -880,6 +938,10 @@ const App = {
       if (c.rank === String(trumpLevel)) {
         if (c.suit === trumpSuit) return 98;
         return 97;
+      }
+      if (c.rank === '2' && String(trumpLevel) !== '2') {
+        if (c.suit === trumpSuit) return 96;
+        return 95;
       }
       return this.RANK_ORDER.indexOf(c.rank);
     };
@@ -904,6 +966,27 @@ const App = {
       html += this.renderCardSmall(card, isPlayed ? '' : 'unplayed');
     }
     html += `</div>`;
+    body.innerHTML = html;
+  },
+
+  _renderHistoryRounds(body) {
+    let html = '';
+    for (let i = 0; i < this.playedHistory.length; i++) {
+      const trick = this.playedHistory[i];
+      html += `<div class="history-trick">`;
+      html += `<div class="history-trick-header">第 ${i + 1} 把 — ${this.getPlayerName(trick.winnerSeat)} 得 ${trick.points} 分</div>`;
+      html += `<div class="history-plays">`;
+      for (const play of trick.plays) {
+        html += `<div class="history-play">`;
+        html += `<span class="history-play-seat">${this.getPlayerName(play.seat)}</span>`;
+        html += `<div class="history-play-cards">`;
+        for (const card of play.cards) {
+          html += this.renderCardSmall(card);
+        }
+        html += `</div></div>`;
+      }
+      html += `</div></div>`;
+    }
     body.innerHTML = html;
   },
 
