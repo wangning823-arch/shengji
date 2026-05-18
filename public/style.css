@@ -491,6 +491,11 @@ html, body {
   background: #3498db;
 }
 
+.player-role.partner {
+  display: block;
+  background: #27ae60;
+}
+
 .player-name {
   font-size: 11px;
   max-width: 60px;
@@ -757,6 +762,88 @@ html, body {
 
 .quick-phrases span:hover {
   background: rgba(255,255,255,0.25);
+}
+
+/* 结果弹窗 */
+#game-result-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+#game-result-overlay.hidden {
+  display: none !important;
+}
+
+.result-card {
+  background: #1a5f2a;
+  border: 2px solid #f5a623;
+  border-radius: 16px;
+  padding: 24px 32px;
+  text-align: center;
+  min-width: 320px;
+  max-width: 420px;
+}
+
+.result-card h2 {
+  margin: 0 0 16px 0;
+  font-size: 22px;
+}
+
+.result-card .win {
+  color: #f5a623;
+}
+
+.result-card .lose {
+  color: #e74c3c;
+}
+
+.result-card .draw {
+  color: #3498db;
+}
+
+#result-details {
+  font-size: 14px;
+  line-height: 1.8;
+  margin-bottom: 16px;
+  text-align: left;
+}
+
+#result-details .detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+
+#result-details .detail-label {
+  color: #aaa;
+}
+
+#result-details .detail-value {
+  font-weight: bold;
+}
+
+#result-ready-status {
+  font-size: 13px;
+  color: #aaa;
+  margin-bottom: 12px;
+}
+
+#btn-next-game {
+  font-size: 16px;
+  padding: 10px 40px;
+}
+
+#btn-next-game:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* 横屏优化 */

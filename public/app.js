@@ -18,6 +18,7 @@ const App = {
   localCurrentTrick: [],
   playedHistory: [],
   historyViewMode: 'all', // 'all' | 'rounds'
+  rebidPhase: false,
 
   SEAT_LABELS: ['北', '东', '南', '西'],
 
@@ -138,6 +139,7 @@ const App = {
     document.getElementById('btn-close-rules').onclick = () => this.hideRules();
 
     document.getElementById('btn-set-bottom').onclick = () => this.setBottom();
+    document.getElementById('btn-next-game').onclick = () => this.send({ type: 'next_game_ready' });
     document.getElementById('btn-played-history').onclick = () => this.showPlayedHistory();
     document.getElementById('btn-close-history').onclick = () => this.hidePlayedHistory();
     document.getElementById('btn-toggle-history-view').onclick = () => this.toggleHistoryView();
@@ -309,6 +311,7 @@ const App = {
         break;
 
       case 'game_started':
+        this.rebidPhase = false;
         this.myHand = msg.hand || [];
         this.localCurrentTrick = [];
         this.playedHistory = [];
@@ -316,6 +319,7 @@ const App = {
         this.gameState = msg.state;
         this.clearTrickArea();
         document.getElementById('trick-winner').textContent = '';
+        document.getElementById('game-result-overlay').classList.add('hidden');
         this.showScreen('game-screen');
         this.updateGameUI();
         break;
@@ -390,7 +394,14 @@ const App = {
         break;
 
       case 'trick_ended':
-        this.showToast(`${this.getPlayerName(msg.winnerSeat)} 得 ${msg.points} 分`);
+        // 只有闲家赢且有得分时才显示分数提示，庄家赢不显示
+        if (msg.points > 0 && this.gameState) {
+          const dealerSeat = this.gameState.dealer;
+          const dealerTeam = this.gameState.players[dealerSeat]?.team;
+          if (msg.winnerTeam !== dealerTeam) {
+            this.showToast(`${this.getPlayerName(msg.winnerSeat)} 得 ${msg.points} 分`);
+          }
+        }
         // 保存本轮记录到历史
         if (this.localCurrentTrick.length > 0) {
           this.playedHistory.push({
@@ -409,6 +420,7 @@ const App = {
         break;
 
       case 'game_ended':
+        this.rebidPhase = false;
         // 取消 trick 清空定时器，让最后一轮出牌保持可见
         if (this._trickClearTimer) {
           clearTimeout(this._trickClearTimer);
@@ -416,19 +428,14 @@ const App = {
         }
         // 延迟显示结果，让用户看到最后一墩的牌
         setTimeout(() => {
-          const dealerWon = msg.idleScore <= 75;
-          let endMsg = `本局结束！${dealerWon ? '庄家胜' : '闲家胜'}`;
-          if (msg.bottomPoints > 0) {
-            endMsg += `，底牌${msg.bottomPoints}分`;
-            if (msg.bottomMultiplier > 1) {
-              endMsg += `(翻${msg.bottomMultiplier}倍)`;
-            }
-          }
-          endMsg += `，${msg.levels.team1} : ${msg.levels.team2}`;
-          this.showToast(endMsg);
+          this.showGameResult(msg);
         }, 1500);
         this.bottomCards = [];
         document.getElementById('btn-view-bottom').classList.add('hidden');
+        break;
+
+      case 'next_game_state':
+        this.updateNextGameReady(msg.readyCount, msg.totalCount);
         break;
 
       case 'chat':
@@ -546,12 +553,15 @@ const App = {
       if (el) {
         el.querySelector('.player-name').textContent = p.userId === this.user?.id ? '我' : p.nickname;
         el.querySelector('.player-cards-count').textContent = p.handCount + '张';
-        // 显示庄家/闲家标记
+        // 显示庄家/对家/闲家标记
         const roleEl = el.querySelector('.player-role');
         if (roleEl) {
           if (gs.dealer === p.seat) {
             roleEl.textContent = '庄';
             roleEl.className = 'player-role dealer';
+          } else if (p.team === gs.players[gs.dealer]?.team) {
+            roleEl.textContent = '对';
+            roleEl.className = 'player-role partner';
           } else {
             roleEl.textContent = '闲';
             roleEl.className = 'player-role idle';
@@ -565,12 +575,22 @@ const App = {
       }
     });
 
-    // 更新亮主按钮状态（手牌可能已更新）
+    // 更新亮主/反主按钮状态（手牌可能已更新）
     if (gs.status === 'dealing' || gs.status === 'bidding') {
       const isMyTurn = gs.currentSeat === this.seat;
-      const canBidNow = isMyTurn && this.canBid();
-      document.getElementById('btn-bid').classList.toggle('hidden', !canBidNow);
-      document.getElementById('btn-pass').classList.toggle('hidden', !canBidNow);
+      if (this.rebidPhase) {
+        const canRebidNow = isMyTurn && this.canRebid();
+        document.getElementById('btn-bid').classList.toggle('hidden', !canRebidNow);
+        document.getElementById('btn-bid').textContent = '反主';
+        document.getElementById('btn-pass').classList.add('hidden');
+        document.getElementById('btn-pass-rebid').classList.toggle('hidden', !isMyTurn);
+      } else {
+        const canBidNow = isMyTurn && this.canBid();
+        document.getElementById('btn-bid').classList.toggle('hidden', !canBidNow);
+        document.getElementById('btn-bid').textContent = '亮主';
+        document.getElementById('btn-pass').classList.toggle('hidden', !canBidNow);
+        document.getElementById('btn-pass-rebid').classList.add('hidden');
+      }
     }
 
     // 从服务端状态同步当前trick（仅在localCurrentTrick为空时，避免覆盖）
@@ -591,6 +611,7 @@ const App = {
   },
 
   updateTurn(seat, phase, rebidPhase) {
+    this.rebidPhase = !!rebidPhase;
     document.querySelectorAll('.player').forEach(p => p.classList.remove('active'));
     const relSeat = this.getRelativeSeat(seat);
     const el = document.querySelector(`.player[data-seat="${relSeat}"]`);
@@ -737,52 +758,16 @@ const App = {
   canBid() {
     if (!this.gameState || (this.gameState.status !== 'bidding' && this.gameState.status !== 'dealing')) return false;
 
-    const trumpLevelStr = String(this.gameState.trumpLevel);
     const existingBid = this.gameState.bids && this.gameState.bids.length > 0 ? this.gameState.bids[this.gameState.bids.length - 1] : null;
 
-    // 检查自己是否已经亮过主（不能自己反自己的主）
-    if (existingBid && existingBid.seat === this.seat) {
-      return false;
-    }
-
-    // 从手牌中分类
-    const levelCards = this.myHand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
-    const jokerCards = this.myHand.filter(c => c.suit === 'joker');
+    // 已经有人亮主了，不能再亮主（只能反主）
+    if (existingBid) return false;
 
     // 首次亮主：需要1张级牌 + 1张王
-    if (!existingBid) {
-      return levelCards.length >= 1 && jokerCards.length >= 1;
-    }
-
-    // 亮无主：需要2张王（无级牌）
-    if (levelCards.length === 0 && jokerCards.length >= 2) {
-      // 反无主：需要更多或更大的王
-      if (existingBid.suit === null) {
-        const compareJokers = (a, b) => {
-          if (a.length !== b.length) return a.length - b.length;
-          return a.filter(j => j.rank === 'big').length - b.filter(j => j.rank === 'big').length;
-        };
-        return compareJokers(jokerCards, existingBid.jokers || []) > 0;
-      }
-      // 反有主为无主：2张王即可
-      return true;
-    }
-
-    // 反无主：只能纯王，需要2张王
-    if (existingBid.suit === null) {
-      if (levelCards.length > 0) return false;
-      if (jokerCards.length < 2) return false;
-      const compareJokers = (a, b) => {
-        if (a.length !== b.length) return a.length - b.length;
-        return a.filter(j => j.rank === 'big').length - b.filter(j => j.rank === 'big').length;
-      };
-      return compareJokers(jokerCards, existingBid.jokers || []) > 0;
-    }
-
-    // 反有主：需要比当前多1张级牌 + 1张王
-    if (jokerCards.length === 0) return false;
-    const existingLevelCount = existingBid.levelCount || 0;
-    return levelCards.length >= existingLevelCount + 1;
+    const trumpLevelStr = String(this.gameState.trumpLevel);
+    const levelCards = this.myHand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
+    const jokerCards = this.myHand.filter(c => c.suit === 'joker');
+    return levelCards.length >= 1 && jokerCards.length >= 1;
   },
 
   canRebid() {
@@ -800,7 +785,7 @@ const App = {
     const levelCards = this.myHand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
     const jokerCards = this.myHand.filter(c => c.suit === 'joker');
 
-    // 无主情况：需要更多或更大的王
+    // 反无主：只能纯王，需要更多或更大的王
     if (existingBid.suit === null) {
       if (jokerCards.length < 2) return false;
       const compareJokers = (a, b) => {
@@ -810,7 +795,12 @@ const App = {
       return compareJokers(jokerCards, existingBid.jokers || []) > 0;
     }
 
-    // 有主情况：需要比当前多1张级牌 + 1张王
+    // 反有主为无主：2张王即可
+    if (levelCards.length === 0 && jokerCards.length >= 2) {
+      return true;
+    }
+
+    // 反有主：需要比当前多1张级牌 + 1张王
     if (jokerCards.length === 0) return false;
     const existingLevelCount = existingBid.levelCount || 0;
     return levelCards.length >= existingLevelCount + 1;
@@ -944,6 +934,75 @@ const App = {
     toast.textContent = message;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 2500);
+  },
+
+  showGameResult(msg) {
+    const overlay = document.getElementById('game-result-overlay');
+    const titleEl = document.getElementById('result-title');
+    const detailsEl = document.getElementById('result-details');
+    const readyEl = document.getElementById('result-ready-status');
+    const btnNext = document.getElementById('btn-next-game');
+
+    // 判断输赢
+    const myTeam = this.gameState?.players[this.seat]?.team;
+    const dealerTeam = msg.dealerTeam;
+    const myTeamIsDealer = myTeam === dealerTeam;
+    let resultText, resultClass;
+    if (msg.winner === 'dealer') {
+      resultText = myTeamIsDealer ? '庄家胜！你赢了' : '庄家胜！你输了';
+      resultClass = myTeamIsDealer ? 'win' : 'lose';
+    } else if (msg.winner === 'idle') {
+      resultText = myTeamIsDealer ? '闲家胜！你输了' : '闲家胜！你赢了';
+      resultClass = myTeamIsDealer ? 'lose' : 'win';
+    } else {
+      resultText = '平局';
+      resultClass = 'draw';
+    }
+    titleEl.textContent = resultText;
+    titleEl.className = resultClass;
+
+    // 详细信息
+    let html = '';
+    html += `<div class="detail-row"><span class="detail-label">闲家得分</span><span class="detail-value">${msg.idleScore} 分</span></div>`;
+    if (msg.bottomPoints > 0) {
+      html += `<div class="detail-row"><span class="detail-label">底牌得分</span><span class="detail-value">${msg.bottomPoints} 分${msg.bottomMultiplier > 1 ? ' (翻' + msg.bottomMultiplier + '倍)' : ''}</span></div>`;
+    }
+    // 升级规则说明
+    if (msg.steps && msg.step) {
+      const step = msg.step;
+      if (msg.winner === 'idle') {
+        const idleSteps = msg.steps.idle;
+        html += `<div class="detail-row"><span class="detail-label">闲家升级</span><span class="detail-value">+${idleSteps} 级</span></div>`;
+      } else if (msg.winner === 'dealer') {
+        const dealerSteps = msg.steps.dealer;
+        if (dealerSteps > 0) {
+          html += `<div class="detail-row"><span class="detail-label">庄家升级</span><span class="detail-value">+${dealerSteps} 级</span></div>`;
+        } else {
+          html += `<div class="detail-row"><span class="detail-label">庄家</span><span class="detail-value">守住</span></div>`;
+        }
+      } else {
+        html += `<div class="detail-row"><span class="detail-label">庄家</span><span class="detail-value">守住（闲家夺庄）</span></div>`;
+      }
+    }
+    html += `<div class="detail-row"><span class="detail-label">当前等级</span><span class="detail-value">${msg.levels.team1} : ${msg.levels.team2}</span></div>`;
+    detailsEl.innerHTML = html;
+
+    readyEl.textContent = '等待所有玩家准备...';
+    btnNext.disabled = false;
+    btnNext.textContent = '下一局';
+    overlay.classList.remove('hidden');
+  },
+
+  updateNextGameReady(readyCount, totalCount) {
+    const readyEl = document.getElementById('result-ready-status');
+    const btnNext = document.getElementById('btn-next-game');
+    if (readyCount >= totalCount) {
+      readyEl.textContent = '所有人已准备，即将开始...';
+      btnNext.disabled = true;
+      btnNext.textContent = '已准备';
+    } else {
+      readyEl.textContent = `已准备 ${readyCount}/${totalCount}`;
+    }
   },
 
   markdownToHtml(md) {

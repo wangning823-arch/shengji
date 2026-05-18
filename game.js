@@ -841,17 +841,30 @@ class GameEngine {
 
     const steps = getUpgradeSteps(idleScore, this.totalScore, this.deckCount);
 
+    const step = this.deckCount * 20;
+
+    // Determine winner: 'dealer', 'idle', or 'draw'
+    let winner;
+    if (steps.idle > 0) winner = 'idle';
+    else if (steps.dealer > 0) winner = 'dealer';
+    else if (idleScore >= step * 2) winner = 'idle';
+    else winner = 'draw';
+
     let dealerLevelChange = steps.dealer;
     let idleLevelChange = steps.idle;
 
     if (idleLevelChange > 0) {
+      // 闲家得分>=120，升级并夺庄
       this.levels[`team${idleTeam}`] += idleLevelChange;
       this.dealer = this.players.find(p => p.team === idleTeam).seat;
     } else if (dealerLevelChange > 0) {
+      // 庄家守住，升级
       this.levels[`team${dealerTeam}`] += dealerLevelChange;
-    } else {
+    } else if (idleScore >= step * 2) {
+      // 闲家得分80-119，夺庄但不额外升级
       this.dealer = this.players.find(p => p.team === idleTeam).seat;
     }
+    // else: 庄家守住但不升级（40-79分），庄家不变
 
     this.trumpLevel = this.levels[`team${this.players[this.dealer].team}`];
 
@@ -860,12 +873,15 @@ class GameEngine {
       gameEnded: true,
       idleScore,
       dealerTeam,
+      winner,
       scores: this.scores,
       levels: this.levels,
       nextDealer: this.dealer,
       nextTrumpLevel: this.trumpLevel,
       bottomPoints,
-      bottomMultiplier
+      bottomMultiplier,
+      steps,
+      step
     };
   }
 

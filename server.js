@@ -634,28 +634,49 @@ async function handleAIRebid(roomId, game, seat) {
 
 // 自动开始下一局
 function autoStartNextGame(roomId) {
-  setTimeout(() => {
-    const room = rooms.get(roomId);
-    if (!room || room.status !== 'waiting') return;
+  // 不再自动开始，等待所有玩家点击"下一局"
+  // AI玩家自动准备
+  const room = rooms.get(roomId);
+  if (!room) return;
+  const roomAIs = roomAIPlayers.get(roomId) || {};
+  room.nextGameReady = room.nextGameReady || new Set();
+  room.players.forEach((p, seat) => {
+    if (p && roomAIs[seat]) {
+      room.nextGameReady.add(p.userId);
+    }
+  });
+  // 广播准备状态
+  broadcast(roomId, {
+    type: 'next_game_state',
+    readyCount: room.nextGameReady.size,
+    totalCount: room.players.filter(p => p !== null).length
+  });
+  // 如果所有人都准备好了（全是AI），直接开始
+  checkAndStartNextGame(roomId);
+}
 
-    const activePlayers = room.players.filter(p => p !== null);
-    if (activePlayers.length !== 4) return;
+function checkAndStartNextGame(roomId) {
+  const room = rooms.get(roomId);
+  if (!room || room.status !== 'waiting') return;
+  const ready = room.nextGameReady || new Set();
+  const activePlayers = room.players.filter(p => p !== null);
+  if (ready.size < activePlayers.length) return;
 
-    activePlayers.sort((a, b) => a.seat - b.seat);
+  activePlayers.sort((a, b) => a.seat - b.seat);
 
-    const game = new GameEngine(
-      room.id, room.deckCount, activePlayers.map(p => ({
-        userId: p.userId,
-        nickname: p.nickname,
-        avatar: p.avatar
-      })),
-      room.nextDealer ?? 0,
-      room.nextTrumpLevel ?? 2,
-      !room.nextDealer
-    );
+  const game = new GameEngine(
+    room.id, room.deckCount, activePlayers.map(p => ({
+      userId: p.userId,
+      nickname: p.nickname,
+      avatar: p.avatar
+    })),
+    room.nextDealer ?? 0,
+    room.nextTrumpLevel ?? 2,
+    room.nextDealer === undefined
+  );
 
-    startGameWithDealing(room, game, roomId);
-  }, 3000);
+  room.nextGameReady = new Set();
+  startGameWithDealing(room, game, roomId);
 }
 
 const server = http.createServer((req, res) => {
@@ -974,12 +995,15 @@ async function handleAITurn(roomId, game, seat) {
             type: 'game_ended',
             idleScore: result.idleScore,
             dealerTeam: result.dealerTeam,
+            winner: result.winner,
             scores: result.scores,
             levels: result.levels,
             nextDealer: result.nextDealer,
             nextTrumpLevel: result.nextTrumpLevel,
             bottomPoints: result.bottomPoints,
-            bottomMultiplier: result.bottomMultiplier
+            bottomMultiplier: result.bottomMultiplier,
+            steps: result.steps,
+            step: result.step
           });
           const room = rooms.get(roomId);
           if (room) {
@@ -1275,7 +1299,7 @@ const messageHandlers = {
       })),
       room.nextDealer ?? 0,
       room.nextTrumpLevel ?? 2,
-      !room.nextDealer
+      room.nextDealer === undefined
     );
 
     startGameWithDealing(room, game, ws.roomId);
@@ -1438,12 +1462,15 @@ const messageHandlers = {
           type: 'game_ended',
           idleScore: result.idleScore,
           dealerTeam: result.dealerTeam,
+          winner: result.winner,
           scores: result.scores,
           levels: result.levels,
           nextDealer: result.nextDealer,
           nextTrumpLevel: result.nextTrumpLevel,
           bottomPoints: result.bottomPoints,
-          bottomMultiplier: result.bottomMultiplier
+          bottomMultiplier: result.bottomMultiplier,
+          steps: result.steps,
+          step: result.step
         });
         room.status = 'waiting';
         room.gameId = null;
@@ -1501,6 +1528,24 @@ const messageHandlers = {
       signal: msg.signal,
       target: msg.target
     }, ws);
+  },
+
+  next_game_ready(ws, msg) {
+    if (!ws.roomId) return;
+    const room = rooms.get(ws.roomId);
+    if (!room || room.status !== 'waiting') return;
+    if (!ws.userId) return;
+
+    room.nextGameReady = room.nextGameReady || new Set();
+    room.nextGameReady.add(ws.userId);
+
+    broadcast(ws.roomId, {
+      type: 'next_game_state',
+      readyCount: room.nextGameReady.size,
+      totalCount: room.players.filter(p => p !== null).length
+    });
+
+    checkAndStartNextGame(ws.roomId);
   }
 };
 
