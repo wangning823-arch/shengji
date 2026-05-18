@@ -289,6 +289,51 @@ function selectLeadPlay(hand, gameState, seat, team, cardTracker) {
 }
 
 /**
+ * 确保跟牌数量与首家出牌数量一致
+ */
+function ensureCorrectPlayCount(cards, hand, leadCards, trumpSuit, trumpLevel) {
+  if (!leadCards || leadCards.length <= 1 || cards.length === leadCards.length) {
+    return cards;
+  }
+
+  const leadCount = leadCards.length;
+  const leadIsTrump = isTrump(leadCards[0], trumpSuit, trumpLevel);
+  const leadSuit = leadCards[0].suit;
+  const playedIds = new Set(cards.map(c => c.id));
+
+  // 剩余手牌
+  const remaining = hand.filter(c => !playedIds.has(c.id));
+
+  // 同花色剩余牌（优先跟同花色）
+  const sameSuitRemaining = remaining.filter(c => {
+    if (leadIsTrump) return isTrump(c, trumpSuit, trumpLevel);
+    return !isTrump(c, trumpSuit, trumpLevel) && c.suit === leadSuit;
+  });
+
+  // 其他牌
+  const otherRemaining = remaining.filter(c => !sameSuitRemaining.some(s => s.id === c.id));
+
+  // 按牌力排序（弱的优先）
+  sameSuitRemaining.sort((a, b) =>
+    evaluateCardValue(a, trumpSuit, trumpLevel) -
+    evaluateCardValue(b, trumpSuit, trumpLevel)
+  );
+  otherRemaining.sort((a, b) =>
+    evaluateCardValue(a, trumpSuit, trumpLevel) -
+    evaluateCardValue(b, trumpSuit, trumpLevel)
+  );
+
+  const result = [...cards];
+  // 先补同花色，再补其他牌
+  for (const c of [...sameSuitRemaining, ...otherRemaining]) {
+    if (result.length >= leadCount) break;
+    result.push(c);
+  }
+
+  return result;
+}
+
+/**
  * 跟牌策略 - 核心改进
  */
 function selectFollowPlay(hand, leadCards, gameState, seat, team, cardTracker) {
@@ -307,36 +352,33 @@ function selectFollowPlay(hand, leadCards, gameState, seat, team, cardTracker) {
   // 找出其他牌
   const otherCards = hand.filter(c => !sameSuitCards.includes(c));
 
-  const candidates = [];
+  let play;
 
   // ============= 核心策略：根据对手/队友出牌调整 =============
 
   if (analysis.leadIsTeammate && analysis.winnerIsTeammate) {
     // 情况1：队友出牌且队友正在赢
     // 策略：跟最小的牌，带上分牌（让队友得分）
-    return selectTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis);
-  }
-
-  if (analysis.leadIsTeammate && !analysis.winnerIsTeammate) {
+    play = selectTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis);
+  } else if (analysis.leadIsTeammate && !analysis.winnerIsTeammate) {
     // 情况2：队友出牌但对手在赢
     // 策略：如果能管住对手就出大牌，否则跟最小的
-    return selectTeammateLosingPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis);
-  }
-
-  if (!analysis.leadIsTeammate && analysis.winnerIsTeammate) {
+    play = selectTeammateLosingPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis);
+  } else if (!analysis.leadIsTeammate && analysis.winnerIsTeammate) {
     // 情况3：对手出牌但队友在赢
     // 策略：跟最小的牌，不要破坏队友的优势
-    return selectOpponentLeadingButTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis);
-  }
-
-  if (!analysis.leadIsTeammate && !analysis.winnerIsTeammate) {
+    play = selectOpponentLeadingButTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis);
+  } else if (!analysis.leadIsTeammate && !analysis.winnerIsTeammate) {
     // 情况4：对手出牌且对手在赢
     // 策略：如果能管住就出大牌，否则跟最小的
-    return selectOpponentWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis);
+    play = selectOpponentWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis);
+  } else {
+    // 默认策略
+    play = selectDefaultFollowPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis);
   }
 
-  // 默认策略
-  return selectDefaultFollowPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis);
+  // 确保出牌数量与首家一致
+  return ensureCorrectPlayCount(play, hand, leadCards, gameState.trumpSuit, gameState.trumpLevel);
 }
 
 /**

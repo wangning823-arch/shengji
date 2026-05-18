@@ -124,7 +124,7 @@ const App = {
 
     document.getElementById('btn-play').onclick = () => this.playCards();
     document.getElementById('btn-bid').onclick = () => this.bid();
-    document.getElementById('btn-confirm-trump').onclick = () => this.send({ type: 'confirm_trump' });
+    document.getElementById('btn-pass-rebid').onclick = () => this.send({ type: 'pass_rebid' });
     document.getElementById('btn-sort').onclick = () => this.sortHand();
     document.getElementById('btn-pass').onclick = () => this.send({ type: 'pass_bid' });
 
@@ -335,7 +335,18 @@ const App = {
         break;
 
       case 'turn_changed':
-        this.updateTurn(msg.seat, msg.phase);
+        if (msg.bids && this.gameState) {
+          this.gameState.bids = msg.bids;
+        }
+        this.updateTurn(msg.seat, msg.phase, msg.rebidPhase);
+        break;
+
+      case 'rebid_phase':
+        this.showToast('有人亮主，等待反主...');
+        break;
+
+      case 'rebid_timer':
+        this.showRebidTimer(msg.seconds);
         break;
 
       case 'bid_made':
@@ -345,7 +356,6 @@ const App = {
       case 'trump_confirmed':
         this.showToast(`主牌: ${this.SUIT_NAMES[msg.trumpSuit] || '无主'}，打${msg.trumpLevel}`);
         document.getElementById('btn-bid').classList.add('hidden');
-        document.getElementById('btn-confirm-trump').classList.add('hidden');
         break;
 
       case 'bottom_taken':
@@ -542,6 +552,13 @@ const App = {
       }
     });
 
+    // 更新亮主按钮状态（手牌可能已更新）
+    if (gs.status === 'dealing' || gs.status === 'bidding') {
+      const isMyTurn = gs.currentSeat === this.seat;
+      const canBidNow = isMyTurn && this.canBid();
+      document.getElementById('btn-bid').classList.toggle('hidden', !canBidNow);
+    }
+
     // 从服务端状态同步当前trick（仅在localCurrentTrick为空时，避免覆盖）
     if (this.localCurrentTrick.length === 0 && gs.currentTrick && gs.currentTrick.length > 0) {
       this.localCurrentTrick = gs.currentTrick.map(t => ({ seat: t.seat, cards: t.cards }));
@@ -568,25 +585,39 @@ const App = {
     const isMyTurn = seat === this.seat;
 
     if (phase === 'dealing' || phase === 'bidding') {
-      document.getElementById('btn-bid').classList.toggle('hidden', !isMyTurn);
-      document.getElementById('btn-pass').classList.toggle('hidden', !isMyTurn);
-      document.getElementById('btn-confirm-trump').classList.toggle('hidden', !isMyTurn);
+      if (rebidPhase) {
+        // 反主阶段
+        const canRebidNow = isMyTurn && this.canRebid();
+        document.getElementById('btn-bid').classList.toggle('hidden', !canRebidNow);
+        document.getElementById('btn-bid').textContent = '反主';
+        document.getElementById('btn-pass-rebid').classList.toggle('hidden', !isMyTurn);
+        document.getElementById('btn-pass').classList.add('hidden');
+      } else {
+        // 亮主阶段
+        const canBidNow = isMyTurn && this.canBid();
+        document.getElementById('btn-bid').classList.toggle('hidden', !canBidNow);
+        document.getElementById('btn-bid').textContent = '亮主';
+        document.getElementById('btn-pass-rebid').classList.add('hidden');
+        document.getElementById('btn-pass').classList.toggle('hidden', !isMyTurn);
+      }
       document.getElementById('btn-set-bottom').classList.add('hidden');
       document.getElementById('btn-play').classList.add('hidden');
       document.getElementById('btn-view-bottom').classList.add('hidden');
     } else if (phase === 'taking_bottom') {
       document.getElementById('btn-bid').classList.add('hidden');
       document.getElementById('btn-pass').classList.add('hidden');
-      document.getElementById('btn-confirm-trump').classList.add('hidden');
+      document.getElementById('btn-pass-rebid').classList.add('hidden');
       document.getElementById('btn-set-bottom').classList.toggle('hidden', !isMyTurn);
       document.getElementById('btn-play').classList.add('hidden');
       document.getElementById('btn-view-bottom').classList.add('hidden');
+      this.hideRebidTimer();
     } else if (phase === 'playing') {
       document.getElementById('btn-bid').classList.add('hidden');
       document.getElementById('btn-pass').classList.add('hidden');
-      document.getElementById('btn-confirm-trump').classList.add('hidden');
+      document.getElementById('btn-pass-rebid').classList.add('hidden');
       document.getElementById('btn-set-bottom').classList.add('hidden');
       document.getElementById('btn-play').classList.toggle('hidden', !isMyTurn);
+      this.hideRebidTimer();
       // 庄家可以查看底牌
       const isDealer = this.gameState && this.gameState.dealer === this.seat;
       const hasBottom = this.bottomCards && this.bottomCards.length > 0;
@@ -688,6 +719,78 @@ const App = {
     this.renderHand();
   },
 
+  canBid() {
+    if (!this.gameState || (this.gameState.status !== 'bidding' && this.gameState.status !== 'dealing')) return false;
+
+    const trumpLevelStr = String(this.gameState.trumpLevel);
+    const existingBid = this.gameState.bids && this.gameState.bids.length > 0 ? this.gameState.bids[this.gameState.bids.length - 1] : null;
+
+    // 从手牌中分类
+    const levelCards = this.myHand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
+    const jokerCards = this.myHand.filter(c => c.suit === 'joker');
+
+    // 首次亮主：需要1张级牌 + 1张王
+    if (!existingBid) {
+      return levelCards.length >= 1 && jokerCards.length >= 1;
+    }
+
+    // 亮无主：需要2张王（无级牌）
+    if (levelCards.length === 0 && jokerCards.length >= 2) {
+      // 反无主：需要更多或更大的王
+      if (existingBid.suit === null) {
+        const compareJokers = (a, b) => {
+          if (a.length !== b.length) return a.length - b.length;
+          return a.filter(j => j.rank === 'big').length - b.filter(j => j.rank === 'big').length;
+        };
+        return compareJokers(jokerCards, existingBid.jokers || []) > 0;
+      }
+      // 反有主为无主：2张王即可
+      return true;
+    }
+
+    // 反无主：只能纯王，需要2张王
+    if (existingBid.suit === null) {
+      if (levelCards.length > 0) return false;
+      if (jokerCards.length < 2) return false;
+      const compareJokers = (a, b) => {
+        if (a.length !== b.length) return a.length - b.length;
+        return a.filter(j => j.rank === 'big').length - b.filter(j => j.rank === 'big').length;
+      };
+      return compareJokers(jokerCards, existingBid.jokers || []) > 0;
+    }
+
+    // 反有主：需要比当前多1张级牌 + 1张王
+    if (jokerCards.length === 0) return false;
+    const existingLevelCount = existingBid.levelCount || 0;
+    return levelCards.length >= existingLevelCount + 1;
+  },
+
+  canRebid() {
+    if (!this.gameState || (this.gameState.status !== 'bidding' && this.gameState.status !== 'dealing')) return false;
+    if (!this.gameState.bids || this.gameState.bids.length === 0) return false;
+
+    const trumpLevelStr = String(this.gameState.trumpLevel);
+    const existingBid = this.gameState.bids[this.gameState.bids.length - 1];
+
+    const levelCards = this.myHand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
+    const jokerCards = this.myHand.filter(c => c.suit === 'joker');
+
+    // 无主情况：需要更多或更大的王
+    if (existingBid.suit === null) {
+      if (jokerCards.length < 2) return false;
+      const compareJokers = (a, b) => {
+        if (a.length !== b.length) return a.length - b.length;
+        return a.filter(j => j.rank === 'big').length - b.filter(j => j.rank === 'big').length;
+      };
+      return compareJokers(jokerCards, existingBid.jokers || []) > 0;
+    }
+
+    // 有主情况：需要比当前多1张级牌 + 1张王
+    if (jokerCards.length === 0) return false;
+    const existingLevelCount = existingBid.levelCount || 0;
+    return levelCards.length >= existingLevelCount + 1;
+  },
+
   bid() {
     if (!this.gameState || (this.gameState.status !== 'bidding' && this.gameState.status !== 'dealing')) return;
 
@@ -697,9 +800,41 @@ const App = {
       return;
     }
 
-    this.send({ type: 'bid', cards: selected.map(c => ({ id: c.id, suit: c.suit, rank: c.rank })) });
+    // 反主阶段发送 rebid 消息
+    const isRebidPhase = this.gameState.currentSeat === this.seat && this.canRebid() && this.gameState.bids && this.gameState.bids.length > 0;
+    const messageType = isRebidPhase ? 'rebid' : 'bid';
+
+    this.send({ type: messageType, cards: selected.map(c => ({ id: c.id, suit: c.suit, rank: c.rank })) });
     this.selectedCards.clear();
     this.renderHand();
+  },
+
+  showRebidTimer(seconds) {
+    const timerEl = document.getElementById('timer');
+    timerEl.classList.remove('hidden');
+    timerEl.textContent = seconds;
+
+    if (this._rebidTimerInterval) {
+      clearInterval(this._rebidTimerInterval);
+    }
+
+    this._rebidTimerInterval = setInterval(() => {
+      seconds--;
+      if (seconds <= 0) {
+        this.hideRebidTimer();
+        return;
+      }
+      timerEl.textContent = seconds;
+    }, 1000);
+  },
+
+  hideRebidTimer() {
+    const timerEl = document.getElementById('timer');
+    timerEl.classList.add('hidden');
+    if (this._rebidTimerInterval) {
+      clearInterval(this._rebidTimerInterval);
+      this._rebidTimerInterval = null;
+    }
   },
 
   setBottom() {

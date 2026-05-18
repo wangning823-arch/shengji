@@ -209,6 +209,11 @@ function validatePlay(hand, playedCards, leadCards, trumpSuit, trumpLevel) {
   const leadIsTrump = isTrump(leadFirst, trumpSuit, trumpLevel);
   const leadPattern = getCardPattern(leadCards, trumpSuit, trumpLevel);
 
+  // 出牌数量必须与首家相同（手牌不足时出全部）
+  if (hand.length >= leadCards.length && playedCards.length !== leadCards.length) {
+    return { valid: false, reason: '出牌数量必须与首家相同' };
+  }
+
   const playedInSuit = playedCards.filter(c => {
     if (leadIsTrump) return isTrump(c, trumpSuit, trumpLevel);
     return !isTrump(c, trumpSuit, trumpLevel) && c.suit === leadFirst.suit;
@@ -595,6 +600,77 @@ class GameEngine {
     }
 
     return { success: true };
+  }
+
+  canBid(seat) {
+    if (this.status !== 'dealing' && this.status !== 'bidding') return false;
+
+    const player = this.players[seat];
+    const trumpLevelStr = String(this.trumpLevel);
+    const existingBid = this.bids.length > 0 ? this.bids[this.bids.length - 1] : null;
+
+    const levelCards = player.hand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
+    const jokerCards = player.hand.filter(c => c.suit === 'joker');
+
+    // 首次亮主：需要1张级牌 + 1张王
+    if (!existingBid) {
+      return levelCards.length >= 1 && jokerCards.length >= 1;
+    }
+
+    // 无主情况：需要2张王
+    if (levelCards.length === 0 && jokerCards.length >= 2) {
+      if (existingBid.suit === null) {
+        const compareJokers = (a, b) => {
+          if (a.length !== b.length) return a.length - b.length;
+          return a.filter(j => j.rank === 'big').length - b.filter(j => j.rank === 'big').length;
+        };
+        return compareJokers(jokerCards, existingBid.jokers || []) > 0;
+      }
+      return true;
+    }
+
+    // 反无主：只能纯王，需要2张王
+    if (existingBid.suit === null) {
+      if (levelCards.length > 0) return false;
+      if (jokerCards.length < 2) return false;
+      const compareJokers = (a, b) => {
+        if (a.length !== b.length) return a.length - b.length;
+        return a.filter(j => j.rank === 'big').length - b.filter(j => j.rank === 'big').length;
+      };
+      return compareJokers(jokerCards, existingBid.jokers || []) > 0;
+    }
+
+    // 反有主：需要比当前多1张级牌 + 1张王
+    if (jokerCards.length === 0) return false;
+    const existingLevelCount = existingBid.levelCount || 0;
+    return levelCards.length >= existingLevelCount + 1;
+  }
+
+  canRebid(seat) {
+    if (this.status !== 'dealing' && this.status !== 'bidding') return false;
+    if (this.bids.length === 0) return false;
+
+    const player = this.players[seat];
+    const existingBid = this.bids[this.bids.length - 1];
+    const trumpLevelStr = String(this.trumpLevel);
+
+    const levelCards = player.hand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
+    const jokerCards = player.hand.filter(c => c.suit === 'joker');
+
+    // 无主情况：需要更多或更大的王
+    if (existingBid.suit === null) {
+      if (jokerCards.length < 2) return false;
+      const compareJokers = (a, b) => {
+        if (a.length !== b.length) return a.length - b.length;
+        return a.filter(j => j.rank === 'big').length - b.filter(j => j.rank === 'big').length;
+      };
+      return compareJokers(jokerCards, existingBid.jokers || []) > 0;
+    }
+
+    // 有主情况：需要比当前多1张级牌 + 1张王
+    if (jokerCards.length === 0) return false;
+    const existingLevelCount = existingBid.levelCount || 0;
+    return levelCards.length >= existingLevelCount + 1;
   }
 
   confirmTrump() {
