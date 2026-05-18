@@ -546,6 +546,9 @@ class GameEngine {
         return { success: false, reason: '需要更多或更大的王' };
       }
       if (enteringBidding) this.status = 'bidding';
+      if (this.isFirstGame) {
+        this.dealer = seat;
+      }
       this.trumpSuit = null;
       this.bids.push({ seat, suit: null, levelCount: 0, jokers: jokerCards, cards: bidCards });
       this.currentSeat = (this.currentSeat + 1) % 4;
@@ -564,6 +567,9 @@ class GameEngine {
     }
 
     if (enteringBidding) this.status = 'bidding';
+    if (this.isFirstGame) {
+      this.dealer = seat;
+    }
     this.trumpSuit = levelCards[0].suit;
     this.bids.push({ seat, suit: levelCards[0].suit, levelCount: levelCards.length, jokers: jokerCards, cards: bidCards });
     this.currentSeat = (this.currentSeat + 1) % 4;

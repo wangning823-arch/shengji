@@ -25,6 +25,37 @@ const App = {
   init() {
     this.bindEvents();
     this.connect();
+    this.detectMobile();
+  },
+
+  isMobile: false,
+
+  detectMobile() {
+    this.isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+      ('ontouchstart' in window && window.innerWidth <= 1024);
+  },
+
+  requestGameFullscreen() {
+    if (!this.isMobile) return;
+    try {
+      const el = document.documentElement;
+      const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
+      if (req) req.call(el);
+    } catch (e) {}
+    // 尝试锁定横屏
+    if (screen.orientation && screen.orientation.lock) {
+      screen.orientation.lock('landscape').catch(() => {});
+    }
+    document.body.classList.add('mobile-game');
+  },
+
+  exitGameFullscreen() {
+    if (document.body.classList.contains('mobile-game')) {
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        try { document.exitFullscreen(); } catch (e) {}
+      }
+      document.body.classList.remove('mobile-game');
+    }
   },
 
   connect() {
@@ -98,6 +129,7 @@ const App = {
       this.isReady = false;
       this.seat = -1;
       this.roomId = null;
+      this.exitGameFullscreen();
       this.showScreen('lobby-screen');
     };
 
@@ -321,6 +353,7 @@ const App = {
         document.getElementById('trick-winner').textContent = '';
         document.getElementById('game-result-overlay').classList.add('hidden');
         this.showScreen('game-screen');
+        this.requestGameFullscreen();
         this.updateGameUI();
         break;
 
@@ -429,6 +462,7 @@ const App = {
         // 延迟显示结果，让用户看到最后一墩的牌
         setTimeout(() => {
           this.showGameResult(msg);
+          this.exitGameFullscreen();
         }, 1500);
         this.bottomCards = [];
         document.getElementById('btn-view-bottom').classList.add('hidden');

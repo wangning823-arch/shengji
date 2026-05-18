@@ -1102,3 +1102,193 @@ html, body {
     height: 40px;
   }
 }
+
+/* ====== 手机横屏游戏模式：半牌+重叠 ====== */
+body.mobile-game #game-screen {
+  overflow: hidden;
+}
+
+body.mobile-game .game-header {
+  padding: 3px 6px;
+  font-size: 11px;
+  gap: 4px;
+}
+
+body.mobile-game .game-header .btn {
+  padding: 3px 6px;
+  font-size: 10px;
+}
+
+body.mobile-game .game-info {
+  gap: 6px;
+}
+
+body.mobile-game #bid-info {
+  font-size: 10px;
+}
+
+body.mobile-game .table {
+  width: 520px;
+  height: 300px;
+  top: 30px;
+}
+
+body.mobile-game .player {
+  gap: 2px;
+}
+
+body.mobile-game .player-avatar {
+  width: 24px;
+  height: 24px;
+}
+
+body.mobile-game .player-name {
+  font-size: 9px;
+  max-width: 40px;
+}
+
+body.mobile-game .player-cards-count {
+  font-size: 8px;
+}
+
+body.mobile-game .player.partner {
+  top: -30px;
+}
+
+body.mobile-game .player.left {
+  left: -70px;
+}
+
+body.mobile-game .player.right {
+  right: -70px;
+}
+
+body.mobile-game #play-area {
+  width: 300px;
+  height: 200px;
+}
+
+body.mobile-game .trick-seat .card {
+  width: 33px;
+  height: 45px;
+  font-size: 10px;
+  padding: 2px;
+  border-radius: 3px;
+}
+
+body.mobile-game #my-hand {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  gap: 0;
+  padding: 4px 8px;
+  max-width: 100vw;
+  flex-wrap: nowrap;
+}
+
+body.mobile-game #my-hand .card {
+  width: 33px;
+  height: 45px;
+  font-size: 9px;
+  padding: 2px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  margin-left: -10px;
+  cursor: pointer;
+  transition: transform 0.1s, margin-top 0.1s;
+}
+
+body.mobile-game #my-hand .card:first-child {
+  margin-left: 0;
+}
+
+body.mobile-game #my-hand .card:hover {
+  transform: translateY(-3px);
+}
+
+body.mobile-game #my-hand .card.selected {
+  transform: translateY(-8px);
+  box-shadow: 0 0 6px #f5a623;
+}
+
+body.mobile-game #game-actions {
+  bottom: 8px;
+  gap: 6px;
+}
+
+body.mobile-game #game-actions .btn {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+body.mobile-game #btn-toggle-chat {
+  bottom: 8px;
+  left: 8px;
+}
+
+body.mobile-game #chat-panel {
+  bottom: 40px;
+  left: 5px;
+  width: 180px;
+  height: 140px;
+}
+
+body.mobile-game #chat-messages {
+  font-size: 11px;
+}
+
+body.mobile-game #chat-input {
+  font-size: 11px;
+}
+
+body.mobile-game #voice-controls {
+  top: 30px;
+  right: 5px;
+  padding: 3px 8px;
+  font-size: 10px;
+}
+
+body.mobile-game #timer {
+  font-size: 32px;
+}
+
+body.mobile-game #bottom-info {
+  bottom: 5px;
+}
+
+body.mobile-game .bottom-label {
+  font-size: 10px;
+}
+
+body.mobile-game .bottom-cards .card {
+  width: 28px;
+  height: 38px;
+  font-size: 8px;
+  padding: 1px;
+}
+
+body.mobile-game .result-card {
+  padding: 16px 20px;
+  min-width: 240px;
+}
+
+body.mobile-game .result-card h2 {
+  font-size: 18px;
+}
+
+body.mobile-game #result-details {
+  font-size: 12px;
+}
+
+body.mobile-game .modal-content {
+  max-width: 95vw;
+  max-height: 90vh;
+}
+
+body.mobile-game .modal-body {
+  font-size: 12px;
+}
