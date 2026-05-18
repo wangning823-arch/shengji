@@ -689,7 +689,7 @@ const App = {
   },
 
   bid() {
-    if (!this.gameState || this.gameState.status !== 'bidding') return;
+    if (!this.gameState || (this.gameState.status !== 'bidding' && this.gameState.status !== 'dealing')) return;
 
     const selected = this.myHand.filter(c => this.selectedCards.has(c.id));
     if (selected.length === 0) {

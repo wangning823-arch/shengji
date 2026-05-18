@@ -1,5 +1,14 @@
 const { LLMClient } = require('./llm-client');
-const { validatePlay, getCardPattern, isTrump, compareCards } = require('./game');
+const {
+  validatePlay, getCardPattern, isTrump, compareCards,
+  isPlayBeating, findWinningCard, getMaxCard, isTractor,
+  groupByRank, getTrumpRank, RANK_ORDER, POINT_CARDS, getRoundPoints
+} = require('./game');
+const {
+  AdvancedAI, evaluateCardValue, evaluateHandStrength,
+  findPairs, findTractors, analyzeGameState,
+  selectLeadPlay, selectFollowPlay, selectBottomCards, decideBid
+} = require('./advanced-ai');
 
 const SUIT_SYMBOLS = { spade: '♠', heart: '♥', diamond: '♦', club: '♣', joker: '🃏' };
 const SUIT_NAMES = { spade: '黑桃', heart: '红桃', diamond: '方块', club: '梅花' };
@@ -11,6 +20,16 @@ class CardTracker {
     this.playedBySuit = { spade: [], heart: [], diamond: [], club: [], joker: [] };
     this.totalPoints = deckCount * 100;
     this.playedPoints = 0;
+    this.voidMap = { 0: {}, 1: {}, 2: {}, 3: {} };
+    this.trumpCardsPlayed = 0;
+    this.trumpSuit = null;
+    this.trumpLevel = 2;
+    this.recordedTrickIds = new Set();
+  }
+
+  setTrump(trumpSuit, trumpLevel) {
+    this.trumpSuit = trumpSuit;
+    this.trumpLevel = trumpLevel;
   }
 
   recordPlayedCards(cards) {
@@ -20,12 +39,58 @@ class CardTracker {
         this.playedBySuit[card.suit].push(card);
         if (card.rank === '5') this.playedPoints += 5;
         else if (card.rank === '10' || card.rank === 'K') this.playedPoints += 10;
+        if (this.trumpSuit && isTrump(card, this.trumpSuit, this.trumpLevel)) {
+          this.trumpCardsPlayed++;
+        }
       }
     }
   }
 
+  recordTrick(trick) {
+    const trickId = trick.plays ? trick.plays.map(p => `${p.seat}:${p.cards.map(c => c.id).join(',')}`).join('|') : null;
+    if (trickId && this.recordedTrickIds.has(trickId)) return;
+    if (trickId) this.recordedTrickIds.add(trickId);
+
+    if (!trick.plays || trick.plays.length === 0) {
+      this.recordPlayedCards(trick.cards || []);
+      return;
+    }
+
+    const leadSuit = trick.plays[0].cards[0].suit;
+    const leadIsTrump = this.trumpSuit && isTrump(trick.plays[0].cards[0], this.trumpSuit, this.trumpLevel);
+
+    for (const play of trick.plays) {
+      this.recordPlayedCards(play.cards);
+      if (play.seat !== trick.plays[0].seat && !leadIsTrump) {
+        const followedSuit = play.cards.some(c => !isTrump(c, this.trumpSuit, this.trumpLevel) && c.suit === leadSuit);
+        if (!followedSuit) {
+          this.voidMap[play.seat][leadSuit] = true;
+        }
+      }
+    }
+  }
+
+  isPlayerVoidInSuit(seat, suit) {
+    return !!this.voidMap[seat]?.[suit];
+  }
+
+  getTrumpCardsRemaining() {
+    // Total trump in deck: jokers (2*deckCount) + level cards (4*deckCount) + trump suit cards (13*deckCount - deckCount for level)
+    const totalTrump = 2 * this.deckCount + 4 * this.deckCount + 12 * this.deckCount;
+    return totalTrump - this.trumpCardsPlayed;
+  }
+
   getRemainingPoints() {
     return this.totalPoints - this.playedPoints;
+  }
+
+  reset() {
+    this.playedCards = new Set();
+    this.playedBySuit = { spade: [], heart: [], diamond: [], club: [], joker: [] };
+    this.playedPoints = 0;
+    this.voidMap = { 0: {}, 1: {}, 2: {}, 3: {} };
+    this.trumpCardsPlayed = 0;
+    this.recordedTrickIds = new Set();
   }
 
   getPlayedSummary() {
@@ -60,84 +125,130 @@ class CandidateGenerator {
 
   static generateLeadCandidates(hand, trumpSuit, trumpLevel) {
     const candidates = [];
+    const sortedHand = [...hand].sort((a, b) =>
+      this.cardStrengthValue(a, trumpSuit, trumpLevel) - this.cardStrengthValue(b, trumpSuit, trumpLevel)
+    );
 
-    // 选项1：出单张大牌
-    const sortedHand = [...hand].sort((a, b) => this.cardStrength(b, a, trumpSuit, trumpLevel));
+    // 1. Tractors (longest first)
+    const tractors = this.findTractorsInSuit(hand, 0, trumpSuit, trumpLevel);
+    for (const t of tractors) {
+      const isTrumpTractor = t.every(c => isTrump(c, trumpSuit, trumpLevel));
+      candidates.push({ cards: t, description: isTrumpTractor ? '出主牌拖拉机' : '出拖拉机', tag: 'tractor' });
+    }
+
+    // 2. Pairs (strongest first)
+    const allPairs = this.findPairsInSuit(hand, trumpSuit, trumpLevel);
+    const strongPairs = [...allPairs].sort((a, b) =>
+      this.cardStrengthValue(b[0], trumpSuit, trumpLevel) - this.cardStrengthValue(a[0], trumpSuit, trumpLevel)
+    );
+    for (const p of strongPairs) {
+      const isTrumpPair = p.every(c => isTrump(c, trumpSuit, trumpLevel));
+      candidates.push({ cards: p, description: isTrumpPair ? '出主牌对子' : `出${p[0].rank}对子`, tag: 'pair' });
+    }
+
+    // 3. Off-suit Aces (strong control)
+    const aces = hand.filter(c => c.rank === 'A' && !isTrump(c, trumpSuit, trumpLevel));
+    for (const a of aces) {
+      candidates.push({ cards: [a], description: '出A控牌', tag: 'strong_single' });
+    }
+
+    // 4. Small non-trump singles (draw out opponent trumps)
+    const smallNonTrump = sortedHand.filter(c => !isTrump(c, trumpSuit, trumpLevel));
+    if (smallNonTrump.length > 0) {
+      candidates.push({ cards: [smallNonTrump[0]], description: '出小牌引主', tag: 'small_single' });
+    }
+
+    // 5. Small trump singles
+    const trumpCards = sortedHand.filter(c => isTrump(c, trumpSuit, trumpLevel));
+    if (trumpCards.length > 0) {
+      candidates.push({ cards: [trumpCards[0]], description: '出小主牌清主', tag: 'small_trump' });
+    }
+
+    // 6. Fallback: smallest card
     if (sortedHand.length > 0) {
-      candidates.push({
-        cards: [sortedHand[0]],
-        description: '出单张大牌'
-      });
+      candidates.push({ cards: [sortedHand[0]], description: '出最小牌', tag: 'fallback' });
     }
 
-    // 选项2：出单张小牌
-    if (sortedHand.length > 1) {
-      candidates.push({
-        cards: [sortedHand[sortedHand.length - 1]],
-        description: '出单张小牌'
-      });
-    }
-
-    // 选项3：出对子（如果有）
-    const pairs = this.findPairs(hand);
-    if (pairs.length > 0) {
-      candidates.push({
-        cards: pairs[0],
-        description: '出对子'
-      });
-    }
-
-    // 选项4：出分牌（如果有）
-    const pointCards = hand.filter(c => ['5', '10', 'K'].includes(c.rank));
-    if (pointCards.length > 0) {
-      candidates.push({
-        cards: [pointCards[0]],
-        description: '出分牌'
-      });
-    }
-
-    return candidates.length > 0 ? candidates : [{ cards: [hand[0]], description: '随便出一张' }];
+    return this.deduplicateCandidates(candidates);
   }
 
   static generateFollowCandidates(hand, leadCards, trumpSuit, trumpLevel) {
-    const candidates = [];
-    const leadPattern = getCardPattern(leadCards, trumpSuit, trumpLevel);
-
-    // 找出所有合法的出牌组合
     const validPlays = this.findAllValidPlays(hand, leadCards, trumpSuit, trumpLevel);
-
     if (validPlays.length === 0) {
-      return [{ cards: [hand[0]], description: '随便出一张' }];
+      return [{ cards: [hand[0]], description: '随便出', tag: 'fallback' }];
     }
 
-    // 选项1：出最小的合法牌
-    const minPlay = validPlays.sort((a, b) => {
+    const candidates = [];
+    const leadIsTrump = isTrump(leadCards[0], trumpSuit, trumpLevel);
+    const leadSuit = leadIsTrump ? 'trump' : leadCards[0].suit;
+
+    // Classify plays: follow suit / trump chop / dump
+    const followPlays = [];
+    const chopPlays = [];
+    const dumpPlays = [];
+
+    for (const play of validPlays) {
+      const inSuit = play.filter(c => {
+        if (leadIsTrump) return isTrump(c, trumpSuit, trumpLevel);
+        return !isTrump(c, trumpSuit, trumpLevel) && c.suit === leadSuit;
+      });
+      const trumps = play.filter(c => isTrump(c, trumpSuit, trumpLevel) && !inSuit.includes(c));
+
+      if (inSuit.length > 0) followPlays.push(play);
+      else if (trumps.length > 0) chopPlays.push(play);
+      else dumpPlays.push(play);
+    }
+
+    const sortByMax = (plays) => [...plays].sort((a, b) => {
       const aMax = Math.max(...a.map(c => this.cardStrengthValue(c, trumpSuit, trumpLevel)));
       const bMax = Math.max(...b.map(c => this.cardStrengthValue(c, trumpSuit, trumpLevel)));
       return aMax - bMax;
-    })[0];
-    candidates.push({ cards: minPlay, description: leadPattern.type === 'pair' ? '跟最小的对子' : '跟最小的牌' });
-
-    // 选项2：出能赢的最大牌（如果有）
-    const winningPlays = validPlays.filter(play => {
-      return this.canWin(play, leadCards, trumpSuit, trumpLevel);
     });
-    if (winningPlays.length > 0) {
-      const maxWinPlay = winningPlays.sort((a, b) => {
-        const aMax = Math.max(...a.map(c => this.cardStrengthValue(c, trumpSuit, trumpLevel)));
-        const bMax = Math.max(...b.map(c => this.cardStrengthValue(c, trumpSuit, trumpLevel)));
-        return bMax - aMax;
-      })[0];
-      candidates.push({ cards: maxWinPlay, description: leadPattern.type === 'pair' ? '出能赢的最大对子' : '出能赢的最大牌' });
+
+    const sortedFollow = sortByMax(followPlays);
+    const sortedChops = sortByMax(chopPlays);
+    const sortedDump = sortByMax(dumpPlays);
+
+    // Minimum follow
+    if (sortedFollow.length > 0) {
+      candidates.push({ cards: sortedFollow[0], description: '跟最小的牌', tag: 'min_follow' });
     }
 
-    // 选项3：出分牌（如果有）
-    const pointPlays = validPlays.filter(play => play.some(c => ['5', '10', 'K'].includes(c.rank)));
-    if (pointPlays.length > 0) {
-      candidates.push({ cards: pointPlays[0], description: '出分牌' });
+    // Minimum winning follow
+    const winningFollows = sortedFollow.filter(p => this.canWin(p, leadCards, trumpSuit, trumpLevel));
+    if (winningFollows.length > 0) {
+      candidates.push({ cards: winningFollows[0], description: '最小能赢的牌', tag: 'min_win_follow' });
     }
 
-    return candidates.length > 0 ? candidates : [{ cards: validPlays[0], description: '跟牌' }];
+    // Maximum follow
+    if (sortedFollow.length > 1) {
+      candidates.push({ cards: sortedFollow[sortedFollow.length - 1], description: '跟最大的牌', tag: 'max_follow' });
+    }
+
+    // Point card follows (dump points to winning teammate)
+    const pointFollows = sortedFollow.filter(p => p.some(c => ['5', '10', 'K'].includes(c.rank)));
+    for (const pf of pointFollows.slice(0, 2)) {
+      candidates.push({ cards: pf, description: '出分牌', tag: 'point_follow' });
+    }
+
+    // Chop options
+    if (sortedChops.length > 0) {
+      candidates.push({ cards: sortedChops[0], description: '将吃(小主)', tag: 'min_chop' });
+      if (sortedChops.length > 1) {
+        candidates.push({ cards: sortedChops[sortedChops.length - 1], description: '将吃(大主)', tag: 'max_chop' });
+      }
+    }
+
+    // Dump options
+    if (sortedDump.length > 0) {
+      candidates.push({ cards: sortedDump[0], description: '垫最小的牌', tag: 'min_dump' });
+      const pointDumps = sortedDump.filter(p => p.some(c => ['5', '10', 'K'].includes(c.rank)));
+      if (pointDumps.length > 0) {
+        candidates.push({ cards: pointDumps[0], description: '垫分牌', tag: 'point_dump' });
+      }
+    }
+
+    return this.deduplicateCandidates(candidates);
   }
 
   static findAllValidPlays(hand, leadCards, trumpSuit, trumpLevel) {
@@ -232,8 +343,43 @@ class CandidateGenerator {
   }
 
   static findTractorsInSuit(suitCards, length, trumpSuit, trumpLevel) {
-    // 简化：返回空数组，由上层处理
-    return [];
+    const tractors = [];
+    const pairs = this.findPairsInSuit(suitCards, trumpSuit, trumpLevel);
+    if (pairs.length < 2) return tractors;
+
+    // Sort pairs by rank
+    pairs.sort((a, b) => {
+      return this.cardStrengthValue(a[0], trumpSuit, trumpLevel) -
+             this.cardStrengthValue(b[0], trumpSuit, trumpLevel);
+    });
+
+    // Try all consecutive pair combinations
+    for (let len = pairs.length; len >= 2; len--) {
+      for (let start = 0; start <= pairs.length - len; start++) {
+        const candidate = [];
+        for (let i = start; i < start + len; i++) {
+          candidate.push(pairs[i][0], pairs[i][1]);
+        }
+        if (isTractor(candidate, trumpSuit, trumpLevel)) {
+          tractors.push(candidate);
+        }
+      }
+    }
+
+    return tractors;
+  }
+
+  static deduplicateCandidates(candidates) {
+    const seen = new Set();
+    const result = [];
+    for (const c of candidates) {
+      const key = c.cards.map(card => card.id).sort().join(',');
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(c);
+      }
+    }
+    return result;
   }
 
   static findPairs(hand) {
@@ -271,10 +417,275 @@ class CandidateGenerator {
   }
 
   static canWin(play, leadCards, trumpSuit, trumpLevel) {
-    // 简化判断：比较最大的牌
-    const leadMax = Math.max(...leadCards.map(c => this.cardStrengthValue(c, trumpSuit, trumpLevel)));
-    const playMax = Math.max(...play.map(c => this.cardStrengthValue(c, trumpSuit, trumpLevel)));
-    return playMax > leadMax;
+    const leadPattern = getCardPattern(leadCards, trumpSuit, trumpLevel);
+    const leadSuit = isTrump(leadCards[0], trumpSuit, trumpLevel) ? 'trump' : leadCards[0].suit;
+    return isPlayBeating(play, leadCards, leadCards, leadPattern, leadSuit, trumpSuit, trumpLevel);
+  }
+
+  static canBeatCurrentWinner(play, currentTrick, trumpSuit, trumpLevel) {
+    if (!currentTrick || currentTrick.length === 0) return true;
+    const leadCards = currentTrick[0].cards;
+    const leadPattern = getCardPattern(leadCards, trumpSuit, trumpLevel);
+    const leadSuit = isTrump(leadCards[0], trumpSuit, trumpLevel) ? 'trump' : leadCards[0].suit;
+    const winnerIdx = findWinningCard(currentTrick, trumpSuit, trumpLevel, leadSuit);
+    const winnerCards = currentTrick[winnerIdx].cards;
+    return isPlayBeating(play, winnerCards, leadCards, leadPattern, leadSuit, trumpSuit, trumpLevel);
+  }
+}
+
+class StrategyEvaluator {
+  constructor(seat, team, cardTracker, gameState) {
+    this.seat = seat;
+    this.team = team;
+    this.tracker = cardTracker;
+    this.gs = gameState;
+    this.trumpSuit = gameState.trumpSuit;
+    this.trumpLevel = gameState.trumpLevel;
+  }
+
+  evaluate(candidate, leadCards) {
+    if (!leadCards || leadCards.length === 0) {
+      return this.evaluateLead(candidate);
+    }
+    return this.evaluateFollow(candidate, leadCards);
+  }
+
+  // ---- LEADING STRATEGY ----
+  evaluateLead(candidate) {
+    const { cards, tag } = candidate;
+    let score = 0;
+
+    if (tag === 'tractor') {
+      score += 40;
+      if (cards.every(c => isTrump(c, this.trumpSuit, this.trumpLevel))) score += 20;
+      score += cards.length * 2;
+    }
+
+    if (tag === 'pair') {
+      const isTrumpPair = cards.every(c => isTrump(c, this.trumpSuit, this.trumpLevel));
+      if (isTrumpPair) {
+        score += 30;
+      } else {
+        score += 15;
+        if (cards[0].rank === 'A') score += 15;
+        else if (cards[0].rank === 'K') score += 10;
+      }
+    }
+
+    if (tag === 'strong_single') {
+      score += 20;
+      // Opponent void bonus
+      score += this.oppVoidBonus(cards[0].suit);
+    }
+
+    if (tag === 'small_single') {
+      score += 5;
+      const tricksRemaining = this.tricksRemaining();
+      if (tricksRemaining <= 3) score -= 10;
+    }
+
+    if (tag === 'small_trump') {
+      score += 10;
+      if (this.countMyTrumps() <= 2) score -= 15;
+    }
+
+    if (tag === 'fallback') {
+      score -= 5;
+    }
+
+    // Suit length bonus: prefer leading your longest suit
+    if (cards[0] && cards[0].suit !== 'joker') {
+      const suitLen = this.countMyCardsInSuit(cards[0].suit);
+      score += suitLen * 2;
+    }
+
+    // Score-aware aggression
+    score += this.scoreAggressionBonus();
+
+    return score;
+  }
+
+  // ---- FOLLOWING STRATEGY ----
+  evaluateFollow(candidate, leadCards) {
+    const { cards, tag } = candidate;
+    let score = 0;
+
+    const currentTrick = this.gs.currentTrick || [];
+    const winnerInfo = this.getCurrentTrickWinner(currentTrick);
+    const teammateIsWinning = winnerInfo && winnerInfo.team === this.team;
+    const iAmWinning = winnerInfo && winnerInfo.seat === this.seat;
+
+    const trickPoints = this.getTrickPoints(currentTrick, cards);
+    const wouldWin = currentTrick.length > 0
+      ? CandidateGenerator.canBeatCurrentWinner(cards, currentTrick, this.trumpSuit, this.trumpLevel)
+      : true;
+
+    if (teammateIsWinning && !iAmWinning) {
+      score += this.scoreTeammateWinning(candidate, trickPoints, wouldWin);
+    } else if (!teammateIsWinning && !iAmWinning) {
+      score += this.scoreOpponentWinning(candidate, trickPoints, wouldWin, leadCards);
+    } else {
+      // Self winning
+      score += this.scoreSelfWinning(candidate, trickPoints, wouldWin);
+    }
+
+    // Last trick: kou di prevention
+    const tricksRemaining = this.tricksRemaining();
+    if (tricksRemaining <= 1) {
+      const isDealerTeam = this.team === (this.gs.players[this.gs.dealer]?.team);
+      if (!isDealerTeam) {
+        // Want to win last trick for bottom points
+        if (wouldWin) score += 50;
+        if (wouldWin && getCardPattern(cards, this.trumpSuit, this.trumpLevel).type === 'tractor') {
+          score += 100;
+        }
+      } else {
+        // Must prevent kou di
+        if (!teammateIsWinning && wouldWin) score += 50;
+      }
+    }
+
+    // Score-aware aggression
+    score += this.scoreAggressionBonus();
+
+    return score;
+  }
+
+  scoreTeammateWinning(candidate, trickPoints, wouldWin) {
+    const { cards, tag } = candidate;
+    let score = 0;
+
+    // NEVER overtake teammate
+    if (wouldWin) score -= 50;
+
+    // Best: dump point cards to winning teammate
+    const hasPoints = cards.some(c => ['5', '10', 'K'].includes(c.rank));
+    if (hasPoints && !wouldWin) {
+      score += 30;
+      const pointValue = cards.reduce((sum, c) => {
+        if (c.rank === '10' || c.rank === 'K') return sum + 10;
+        if (c.rank === '5') return sum + 5;
+        return sum;
+      }, 0);
+      score += pointValue;
+    }
+
+    // Good: play smallest
+    if (tag === 'min_follow' || tag === 'min_dump') score += 15;
+
+    // Bad: play big cards
+    if (tag === 'max_follow') score -= 30;
+
+    // Very bad: chop when teammate is winning
+    if (tag === 'min_chop' || tag === 'max_chop') score -= 40;
+
+    return score;
+  }
+
+  scoreOpponentWinning(candidate, trickPoints, wouldWin, leadCards) {
+    const { cards, tag } = candidate;
+    let score = 0;
+
+    if (wouldWin) {
+      score += 25;
+      score += trickPoints;
+
+      // Prefer minimum winning play
+      if (tag === 'min_win_follow') score += 20;
+      else if (tag === 'max_follow' || tag === 'max_chop') score -= 10;
+
+      // Trump chop evaluation
+      if (tag === 'min_chop' || tag === 'max_chop') {
+        if (trickPoints >= 10) score += 15;
+        else if (trickPoints === 0) score -= 20;
+        if (tag === 'max_chop') score -= 10;
+        if (this.countMyTrumps() <= 2) score -= 15;
+      }
+    } else {
+      // Cannot win: play smallest, save big cards
+      if (tag === 'min_follow' || tag === 'min_dump') score += 15;
+
+      // Don't feed points to opponent
+      const hasPoints = cards.some(c => ['5', '10', 'K'].includes(c.rank));
+      if (hasPoints) score -= 20;
+
+      // Don't waste big cards
+      if (tag === 'max_follow') score -= 20;
+
+      // Never waste trump if can't win
+      if (tag === 'min_chop' || tag === 'max_chop') score -= 40;
+    }
+
+    return score;
+  }
+
+  scoreSelfWinning(candidate, trickPoints, wouldWin) {
+    const { tag } = candidate;
+    let score = 0;
+
+    if (wouldWin) score += 10;
+    if (tag === 'min_follow' || tag === 'min_dump') score += 15;
+    if (tag === 'max_follow') score -= 15;
+
+    return score;
+  }
+
+  // ---- HELPERS ----
+
+  getCurrentTrickWinner(currentTrick) {
+    if (!currentTrick || currentTrick.length === 0) return null;
+    const leadCards = currentTrick[0].cards;
+    const leadSuit = isTrump(leadCards[0], this.trumpSuit, this.trumpLevel) ? 'trump' : leadCards[0].suit;
+    const winnerIdx = findWinningCard(currentTrick, this.trumpSuit, this.trumpLevel, leadSuit);
+    const winner = currentTrick[winnerIdx];
+    const team = this.gs.players[winner.seat]?.team;
+    return { seat: winner.seat, team };
+  }
+
+  getTrickPoints(currentTrick, myCards) {
+    let points = 0;
+    for (const play of currentTrick) {
+      points += getRoundPoints(play.cards);
+    }
+    points += getRoundPoints(myCards);
+    return points;
+  }
+
+  countMyTrumps() {
+    return this.hand ? this.hand.filter(c => isTrump(c, this.trumpSuit, this.trumpLevel)).length : 0;
+  }
+
+  countMyCardsInSuit(suit) {
+    return this.hand ? this.hand.filter(c => c.suit === suit).length : 0;
+  }
+
+  tricksRemaining() {
+    return Math.min(...this.gs.players.map(p => p.handCount || 0));
+  }
+
+  oppVoidBonus(suit) {
+    if (!suit || suit === 'joker') return 0;
+    const opp1 = (this.seat + 1) % 4;
+    const opp2 = (this.seat + 3) % 4;
+    const opp1Void = this.tracker.isPlayerVoidInSuit(opp1, suit);
+    const opp2Void = this.tracker.isPlayerVoidInSuit(opp2, suit);
+    if (opp1Void && opp2Void) return 20;
+    if (opp1Void || opp2Void) return 10;
+    return 0;
+  }
+
+  scoreAggressionBonus() {
+    const myTeamScore = this.team === 1 ? (this.gs.scores?.team1 || 0) : (this.gs.scores?.team2 || 0);
+    const oppTeamScore = this.team === 1 ? (this.gs.scores?.team2 || 0) : (this.gs.scores?.team1 || 0);
+    const isDealerTeam = this.team === (this.gs.players[this.gs.dealer]?.team);
+
+    if (!isDealerTeam) {
+      // Idle team needs points
+      if (myTeamScore < 40) return 5;
+    } else {
+      if (oppTeamScore >= 60) return 10;
+    }
+    return 0;
   }
 }
 
@@ -304,12 +715,76 @@ class FallbackAI {
   }
 
   static decideBottom(hand, bottomCount, trumpSuit, trumpLevel) {
-    // 选最弱的牌扣底：先按牌力排序，取最弱的
     const sorted = [...hand].sort((a, b) => {
       return CandidateGenerator.cardStrengthValue(a, trumpSuit, trumpLevel) -
              CandidateGenerator.cardStrengthValue(b, trumpSuit, trumpLevel);
     });
     return sorted.slice(0, bottomCount);
+  }
+}
+
+class SmartAI {
+  static selectBestPlay(hand, leadCards, gameState, cardTracker, seat, team) {
+    // 使用新的高级AI系统
+    const advancedAI = new AdvancedAI(seat, team, cardTracker);
+    advancedAI.hand = hand;
+
+    // 尝试高级AI
+    try {
+      const play = advancedAI.selectBestPlay(hand, leadCards, gameState);
+      const validation = validatePlay(hand, play, leadCards, gameState.trumpSuit, gameState.trumpLevel);
+      if (validation.valid) {
+        return play;
+      }
+    } catch (e) {
+      console.error('AdvancedAI error:', e);
+    }
+
+    // 回退到原来的候选生成逻辑
+    const candidates = CandidateGenerator.generateCandidates(
+      hand, leadCards, gameState.trumpSuit, gameState.trumpLevel
+    );
+
+    const evaluator = new StrategyEvaluator(seat, team, cardTracker, gameState);
+    evaluator.hand = hand;
+
+    let bestScore = -Infinity;
+    let bestPlay = candidates[0].cards;
+
+    for (const candidate of candidates) {
+      const score = evaluator.evaluate(candidate, leadCards);
+      if (score > bestScore) {
+        bestScore = score;
+        bestPlay = candidate.cards;
+      }
+    }
+
+    // Validate
+    const validation = validatePlay(hand, bestPlay, leadCards, gameState.trumpSuit, gameState.trumpLevel);
+    if (validation.valid) return bestPlay;
+
+    // Try candidates in score order
+    const scored = candidates.map(c => ({
+      cards: c.cards,
+      score: evaluator.evaluate(c, leadCards)
+    })).sort((a, b) => b.score - a.score);
+
+    for (const s of scored) {
+      const v = validatePlay(hand, s.cards, leadCards, gameState.trumpSuit, gameState.trumpLevel);
+      if (v.valid) return s.cards;
+    }
+
+    return FallbackAI.selectBestValid(hand, leadCards, gameState);
+  }
+
+  static decideBid(hand, trumpLevel) {
+    // 使用新的亮主策略
+    return decideBid(hand, trumpLevel);
+  }
+
+  static decideBottom(hand, bottomCount, trumpSuit, trumpLevel) {
+    // 使用新的扣底策略
+    return selectBottomCards(hand, bottomCount, trumpSuit, trumpLevel, true);
   }
 }
 
@@ -328,16 +803,15 @@ class LLMAIPlayer {
 
   setHand(cards) {
     this.hand = cards;
+    this.cardTracker.reset();
   }
 
   async decideBid(gameState) {
-    // 亮主决策：先用规则AI，有LLM可以优化
-    const bid = FallbackAI.decideBid(this.hand, gameState.trumpLevel);
-    return bid;
+    return SmartAI.decideBid(this.hand, gameState.trumpLevel);
   }
 
   async decideBottom(gameState) {
-    return FallbackAI.decideBottom(
+    return SmartAI.decideBottom(
       this.hand,
       gameState.bottomCount || 8,
       gameState.trumpSuit,
@@ -346,20 +820,29 @@ class LLMAIPlayer {
   }
 
   async decidePlay(gameState, leadCards) {
-    // 记录已出牌
+    // Update card tracker with trump info
+    if (gameState.trumpSuit) {
+      this.cardTracker.setTrump(gameState.trumpSuit, gameState.trumpLevel);
+    }
+
+    // Record completed tricks
     for (const trick of gameState.tricks || []) {
-      this.cardTracker.recordPlayedCards(trick.cards || []);
+      this.cardTracker.recordTrick(trick);
     }
 
     if (!this.useLLM) {
-      return FallbackAI.selectBestValid(this.hand, leadCards, gameState);
+      return SmartAI.selectBestPlay(
+        this.hand, leadCards, gameState, this.cardTracker, this.seat, this.team
+      );
     }
 
     try {
       return await this.decideWithLLM(gameState, leadCards);
     } catch (err) {
-      console.error('LLM error, using fallback:', err);
-      return FallbackAI.selectBestValid(this.hand, leadCards, gameState);
+      console.error('LLM error, using SmartAI:', err);
+      return SmartAI.selectBestPlay(
+        this.hand, leadCards, gameState, this.cardTracker, this.seat, this.team
+      );
     }
   }
 
@@ -451,4 +934,4 @@ ${candidates.map((c, i) => `选项${i + 1}：${this.formatCardsList(c.cards)} - 
   }
 }
 
-module.exports = { LLMAIPlayer, FallbackAI, CandidateGenerator, CardTracker };
+module.exports = { LLMAIPlayer, FallbackAI, SmartAI, CandidateGenerator, CardTracker, StrategyEvaluator };

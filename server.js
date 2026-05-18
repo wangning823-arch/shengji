@@ -156,28 +156,61 @@ function processDealingRound(roomId, game) {
   if (!room) return;
   const roomAIs = roomAIPlayers.get(roomId) || {};
 
-  // dealing 阶段：当前座位回到 dealer，说明要开始新一轮发牌
-  if (game.status === 'dealing' && game.currentSeat === game.dealer) {
-    // 如果还有牌要发，先发一轮
-    if (game._dealRound < game._handSize) {
-      const result = game.dealNextRound();
-      // 广播本轮发牌
-      for (const player of room.players.filter(p => p !== null)) {
-        if (player.ws) {
-          send(player.ws, {
-            type: 'cards_dealt',
-            hand: game.players[player.seat].hand,
-            round: result.round,
-            totalRounds: game._handSize
-          });
-        }
+  // dealing 阶段：currentSeat 回到 dealer，开始新一轮发牌
+  // bidding 阶段：currentSeat 回到 bidRoundStartSeat，开始新一轮发牌
+  const shouldDeal = (game.status === 'dealing' && game.currentSeat === game.dealer) ||
+                     (game.status === 'bidding' && game.currentSeat === game.bidRoundStartSeat);
+  if (shouldDeal && game._dealRound < game._handSize) {
+    const result = game.dealNextRound();
+    // 广播本轮发牌
+    for (const player of room.players.filter(p => p !== null)) {
+      if (player.ws) {
+        send(player.ws, {
+          type: 'cards_dealt',
+          hand: game.players[player.seat].hand,
+          round: result.round || game._handSize,
+          totalRounds: game._handSize
+        });
       }
-      // 给 AI 设置手牌
-      for (let seat = 0; seat < 4; seat++) {
-        if (roomAIs[seat]) {
-          roomAIs[seat].setHand(game.players[seat].hand);
-        }
+    }
+    // 给 AI 设置手牌
+    for (let seat = 0; seat < 4; seat++) {
+      if (roomAIs[seat]) {
+        roomAIs[seat].setHand(game.players[seat].hand);
       }
+    }
+    if (result.done) {
+      broadcast(roomId, {
+        type: 'trump_confirmed',
+        trumpSuit: game.trumpSuit,
+        trumpLevel: game.trumpLevel,
+        dealer: game.dealer
+      });
+      broadcast(roomId, {
+        type: 'bottom_taken',
+        dealer: game.dealer,
+        bottomCount: game.bottomCards.length
+      });
+      broadcast(roomId, {
+        type: 'turn_changed',
+        seat: game.currentSeat,
+        phase: 'taking_bottom'
+      });
+      broadcast(roomId, {
+        type: 'game_state',
+        state: game.toJSON()
+      });
+      const dealerPlayer = room.players[game.dealer];
+      if (dealerPlayer && dealerPlayer.ws) {
+        send(dealerPlayer.ws, {
+          type: 'game_state',
+          state: game.toJSON(game.dealer)
+        });
+      }
+      if (roomAIs[game.dealer]) {
+        setTimeout(() => handleAITurn(roomId, game, game.dealer), 500);
+      }
+      return;
     }
   }
 

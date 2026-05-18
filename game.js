@@ -572,11 +572,25 @@ class GameEngine {
       if (this._dealRound < this._handSize) {
         return { success: true, action: 'continue_dealing' };
       }
+      // 牌已发完，确保底牌已设置
+      if (this.bottomCards.length === 0 && this._deck.length > 0) {
+        this.bottomCards = this._deck.slice(-this._bottomCount);
+        this._deck = [];
+      }
       return { success: true, action: 'confirm_trump' };
     }
 
-    // bidding 阶段转完一圈，确认主牌
+    // bidding 阶段转完一圈
     if (this.status === 'bidding' && this.currentSeat === this.bidRoundStartSeat) {
+      // 还有牌要发，继续逐轮发牌
+      if (this._dealRound < this._handSize) {
+        return { success: true, action: 'continue_dealing' };
+      }
+      // 牌已发完，确认主牌
+      if (this.bottomCards.length === 0 && this._deck.length > 0) {
+        this.bottomCards = this._deck.slice(-this._bottomCount);
+        this._deck = [];
+      }
       return { success: true, action: 'confirm_trump' };
     }
 
@@ -588,6 +602,11 @@ class GameEngine {
     while (this._deck.length > 0 && this._dealRound < this._handSize) {
       const result = this.dealNextRound();
       if (result.done) break;
+    }
+    // 确保底牌已设置
+    if (this.bottomCards.length === 0 && this._deck.length > 0) {
+      this.bottomCards = this._deck.slice(-this._bottomCount);
+      this._deck = [];
     }
 
     if (this.bids.length === 0) {
@@ -790,11 +809,18 @@ module.exports = {
   GameEngine,
   SUITS,
   RANKS,
+  RANK_ORDER,
+  POINT_CARDS,
   isTrump,
   compareCards,
   getCardPattern,
   validatePlay,
   findWinningCard,
+  isPlayBeating,
+  getMaxCard,
+  isTractor,
+  groupByRank,
+  getTrumpRank,
   getRoundPoints,
   getUpgradeSteps
 };
