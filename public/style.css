@@ -1169,10 +1169,10 @@ body.mobile-game #play-area {
 }
 
 body.mobile-game .trick-seat .card {
-  width: 33px;
-  height: 45px;
+  width: 36px;
+  height: 48px;
   font-size: 10px;
-  padding: 2px;
+  padding: 2px 3px;
   border-radius: 3px;
 }
 
@@ -1191,10 +1191,10 @@ body.mobile-game #my-hand {
 }
 
 body.mobile-game #my-hand .card {
-  width: 33px;
-  height: 45px;
+  width: 36px;
+  height: 48px;
   font-size: 9px;
-  padding: 2px;
+  padding: 2px 3px;
   border-radius: 3px;
   flex-shrink: 0;
   margin-left: -10px;
@@ -1265,10 +1265,10 @@ body.mobile-game .bottom-label {
 }
 
 body.mobile-game .bottom-cards .card {
-  width: 28px;
-  height: 38px;
+  width: 30px;
+  height: 40px;
   font-size: 8px;
-  padding: 1px;
+  padding: 2px;
 }
 
 body.mobile-game .result-card {
