@@ -384,7 +384,7 @@ class GameEngine {
     this.dealer = dealer;
     this.trumpSuit = null;
     this.trumpLevel = trumpLevel;
-    this.status = 'dealing';
+    this.status = 'waiting';
     this.bottomCards = [];
     this.currentTrick = [];
     this.leadSeat = 0;
@@ -395,25 +395,65 @@ class GameEngine {
     this.bids = [];
     this.totalScore = deckCount * 100;
     this.bidRoundStartSeat = dealer;
+
+    // 逐轮发牌相关
+    this._deck = [];
+    this._bottomCount = 0;
+    this._handSize = 0;
+    this._dealRound = 0;
   }
 
-  deal() {
-    const deck = shuffle(createDeck(this.deckCount));
-    const bottomCount = getBottomCardCount(this.deckCount);
-    const handSize = (deck.length - bottomCount) / 4;
+  startDeal() {
+    this._deck = shuffle(createDeck(this.deckCount));
+    this._bottomCount = getBottomCardCount(this.deckCount);
+    this._handSize = (this._deck.length - this._bottomCount) / 4;
 
     for (let i = 0; i < 4; i++) {
-      this.players[i].hand = deck.slice(i * handSize, (i + 1) * handSize);
+      this.players[i].hand = [];
     }
-    this.bottomCards = deck.slice(-bottomCount);
-    this.status = 'bidding';
+
+    this._dealRound = 0;
+    this.bids = [];
+    this.trumpSuit = null;
+    this.bottomCards = [];
+    this.status = 'dealing';
     this.currentSeat = this.dealer;
     this.bidRoundStartSeat = this.dealer;
-    return { hands: this.players.map(p => p.hand.length), bottom: this.bottomCards.length };
+
+    return this.dealNextRound();
+  }
+
+  dealNextRound() {
+    if (this._dealRound >= this._handSize) {
+      // 发完所有手牌
+      this.bottomCards = this._deck.slice(-this._bottomCount);
+      this._deck = [];
+
+      if (this.bids.length === 0 && this.bottomCards.length > 0) {
+        const lastCard = this.bottomCards[this.bottomCards.length - 1];
+        this.trumpSuit = lastCard.suit === 'joker' ? null : lastCard.suit;
+      }
+
+      const dealer = this.players[this.dealer];
+      dealer.hand.push(...this.bottomCards);
+      this.status = 'taking_bottom';
+      this.currentSeat = this.dealer;
+      return { done: true, hands: this.players.map(p => p.hand.length), bottom: this.bottomCards.length };
+    }
+
+    // 本轮发牌：每人一张，从庄家开始
+    for (let i = 0; i < 4; i++) {
+      const seat = (this.dealer + i) % 4;
+      this.players[seat].hand.push(this._deck[this._dealRound * 4 + i]);
+    }
+    this._dealRound++;
+    this.currentSeat = this.dealer;
+
+    return { done: false, round: this._dealRound, hands: this.players.map(p => p.hand.length) };
   }
 
   bid(seat, cards) {
-    if (this.status !== 'bidding') return { success: false, reason: '不在亮主阶段' };
+    if (this.status !== 'dealing' && this.status !== 'bidding') return { success: false, reason: '不在亮主阶段' };
     if (seat !== this.currentSeat) return { success: false, reason: '不是当前玩家的回合' };
 
     const player = this.players[seat];
@@ -431,6 +471,9 @@ class GameEngine {
       return { success: false, reason: '只能使用级牌和王' };
     }
 
+    const existingBid = this.bids[this.bids.length - 1];
+    const enteringBidding = this.status === 'dealing';
+
     // 级牌必须同花色
     if (levelCards.length > 0) {
       const firstSuit = levelCards[0].suit;
@@ -439,24 +482,26 @@ class GameEngine {
       }
     }
 
-    const existingBid = this.bids[this.bids.length - 1];
-
     // 王比较：数量优先，同数量比大王数量
     const compareJokers = (a, b) => {
       if (a.length !== b.length) return a.length - b.length;
       return a.filter(j => j.rank === 'big').length - b.filter(j => j.rank === 'big').length;
     };
 
-    // 无主：纯王（≥2张），无级牌
-    if (levelCards.length === 0 && jokerCards.length >= 2) {
+    // 无主：纯王2张（2小王或2大王或任意2张）
+    if (levelCards.length === 0 && jokerCards.length === 2) {
       if (existingBid) {
         if (existingBid.suit === null) {
+          // 反无主：需要更多或更大的王
           if (compareJokers(jokerCards, existingBid.jokers || []) <= 0) {
             return { success: false, reason: '需要更多或更大的王' };
           }
-        } else {
-          return { success: false, reason: '反有主必须带级牌' };
         }
+        // 反有主为无主：2张王即可
+      }
+      if (enteringBidding) {
+        this.status = 'bidding';
+        this.dealer = seat;
       }
       this.trumpSuit = null;
       this.bids.push({ seat, suit: null, levelCount: 0, jokers: jokerCards, cards: bidCards });
@@ -466,28 +511,31 @@ class GameEngine {
     }
 
     if (!existingBid) {
-      // 首次亮主：无王，至少2张级牌
-      if (jokerCards.length > 0) {
-        return { success: false, reason: '首次亮主不能使用王' };
+      // 首次亮主：单张级牌 + 1张王
+      if (levelCards.length < 1 || jokerCards.length < 1) {
+        return { success: false, reason: '首次亮主需要1张级牌+1张王' };
       }
-      if (levelCards.length < 2) {
-        return { success: false, reason: '亮主至少需要2张级牌' };
-      }
+      this.status = 'bidding';
+      this.dealer = seat;
       this.trumpSuit = levelCards[0].suit;
-      this.bids.push({ seat, suit: levelCards[0].suit, levelCount: levelCards.length, jokers: [], cards: bidCards });
+      this.bids.push({ seat, suit: levelCards[0].suit, levelCount: levelCards.length, jokers: jokerCards, cards: bidCards });
       this.currentSeat = (this.currentSeat + 1) % 4;
       this.bidRoundStartSeat = this.currentSeat;
       return { success: true, trumpSuit: levelCards[0].suit };
     }
 
-    // 反无主：只能纯王
+    // 反无主：只能纯王，需要更大
     if (existingBid.suit === null) {
       if (levelCards.length > 0) {
         return { success: false, reason: '反无主只能使用王' };
       }
+      if (jokerCards.length < 2) {
+        return { success: false, reason: '反无主需要2张王' };
+      }
       if (compareJokers(jokerCards, existingBid.jokers || []) <= 0) {
         return { success: false, reason: '需要更多或更大的王' };
       }
+      if (enteringBidding) this.status = 'bidding';
       this.trumpSuit = null;
       this.bids.push({ seat, suit: null, levelCount: 0, jokers: jokerCards, cards: bidCards });
       this.currentSeat = (this.currentSeat + 1) % 4;
@@ -495,22 +543,17 @@ class GameEngine {
       return { success: true, trumpSuit: null };
     }
 
-    // 反有主：必须有王
+    // 反有主：需要比当前多1张级牌 + 1张王
     if (jokerCards.length === 0) {
       return { success: false, reason: '反主必须包含王' };
     }
 
     const existingLevelCount = existingBid.levelCount || 0;
-    if (levelCards.length < existingLevelCount) {
-      return { success: false, reason: `反主需要至少${existingLevelCount}张级牌` };
+    if (levelCards.length < existingLevelCount + 1) {
+      return { success: false, reason: `反主需要至少${existingLevelCount + 1}张级牌` };
     }
 
-    if (levelCards.length === existingLevelCount) {
-      if (compareJokers(jokerCards, existingBid.jokers || []) <= 0) {
-        return { success: false, reason: '需要更大的王才能反主' };
-      }
-    }
-
+    if (enteringBidding) this.status = 'bidding';
     this.trumpSuit = levelCards[0].suit;
     this.bids.push({ seat, suit: levelCards[0].suit, levelCount: levelCards.length, jokers: jokerCards, cards: bidCards });
     this.currentSeat = (this.currentSeat + 1) % 4;
@@ -519,13 +562,34 @@ class GameEngine {
   }
 
   passBid(seat) {
-    if (this.status !== 'bidding') return { success: false, reason: '不在亮主阶段' };
+    if (this.status !== 'dealing' && this.status !== 'bidding') return { success: false, reason: '不在亮主阶段' };
     if (seat !== this.currentSeat) return { success: false, reason: '不是当前玩家的回合' };
     this.currentSeat = (this.currentSeat + 1) % 4;
+
+    // dealing 阶段转完一圈
+    if (this.status === 'dealing' && this.currentSeat === this.dealer) {
+      // 还有牌要发，继续发牌；否则确认主牌
+      if (this._dealRound < this._handSize) {
+        return { success: true, action: 'continue_dealing' };
+      }
+      return { success: true, action: 'confirm_trump' };
+    }
+
+    // bidding 阶段转完一圈，确认主牌
+    if (this.status === 'bidding' && this.currentSeat === this.bidRoundStartSeat) {
+      return { success: true, action: 'confirm_trump' };
+    }
+
     return { success: true };
   }
 
   confirmTrump() {
+    // 发完剩余手牌
+    while (this._deck.length > 0 && this._dealRound < this._handSize) {
+      const result = this.dealNextRound();
+      if (result.done) break;
+    }
+
     if (this.bids.length === 0) {
       if (this.bottomCards.length > 0) {
         const lastCard = this.bottomCards[this.bottomCards.length - 1];

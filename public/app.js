@@ -316,13 +316,14 @@ const App = {
         this.gameState = msg.state;
         this.clearTrickArea();
         document.getElementById('trick-winner').textContent = '';
-        this.sortHand();
         this.showScreen('game-screen');
         this.updateGameUI();
-        document.getElementById('btn-bid').classList.remove('hidden');
-        document.getElementById('btn-play').classList.add('hidden');
-        document.getElementById('btn-confirm-trump').classList.add('hidden');
-        document.getElementById('btn-set-bottom').classList.add('hidden');
+        break;
+
+      case 'cards_dealt':
+        this.myHand = msg.hand || [];
+        this.sortHand();
+        this.updateGameUI();
         break;
 
       case 'game_state':
@@ -566,7 +567,7 @@ const App = {
 
     const isMyTurn = seat === this.seat;
 
-    if (phase === 'bidding') {
+    if (phase === 'dealing' || phase === 'bidding') {
       document.getElementById('btn-bid').classList.toggle('hidden', !isMyTurn);
       document.getElementById('btn-pass').classList.toggle('hidden', !isMyTurn);
       document.getElementById('btn-confirm-trump').classList.toggle('hidden', !isMyTurn);
