@@ -70,6 +70,15 @@ const App = {
       }
       if (this.user) {
         this.send({ type: 'auth', userId: this.user.id, nickname: this.user.nickname, avatar: this.user.avatar });
+        // 检查是否有未完成的游戏，自动重连
+        const savedGame = localStorage.getItem('shengji_game');
+        if (savedGame) {
+          const { roomId, seat } = JSON.parse(savedGame);
+          if (roomId) {
+            this.roomId = roomId;
+            this.send({ type: 'join_room', roomId, seat });
+          }
+        }
       }
     };
 
@@ -172,6 +181,11 @@ const App = {
 
     document.getElementById('btn-set-bottom').onclick = () => this.setBottom();
     document.getElementById('btn-next-game').onclick = () => this.send({ type: 'next_game_ready' });
+    document.getElementById('btn-exit-game').onclick = () => {
+      if (confirm('确定要退出游戏吗？')) {
+        this.send({ type: 'leave_game' });
+      }
+    };
     document.getElementById('btn-played-history').onclick = () => this.showPlayedHistory();
     document.getElementById('btn-close-history').onclick = () => this.hidePlayedHistory();
     document.getElementById('btn-toggle-history-view').onclick = () => this.toggleHistoryView();
@@ -331,6 +345,7 @@ const App = {
       case 'joined':
         this.seat = msg.seat;
         this.isSitting = true;
+        localStorage.setItem('shengji_game', JSON.stringify({ roomId: this.roomId, seat: this.seat }));
         document.getElementById('room-id-display').textContent = '房间号: ' + this.roomId;
         this.showScreen('room-screen');
         break;
@@ -340,6 +355,14 @@ const App = {
       case 'player_ready':
       case 'room_state':
         if (msg.state) this.updateRoomState(msg.state);
+        break;
+
+      case 'player_offline':
+        this.showToast(`${msg.nickname} 掉线了，等待重连...`);
+        break;
+
+      case 'player_reconnected':
+        this.showToast(`${msg.nickname} 已重连`);
         break;
 
       case 'game_started':
@@ -352,6 +375,11 @@ const App = {
         this.clearTrickArea();
         document.getElementById('trick-winner').textContent = '';
         document.getElementById('game-result-overlay').classList.add('hidden');
+        // 保存游戏信息用于重连
+        if (msg.seat !== undefined) {
+          this.seat = msg.seat;
+          localStorage.setItem('shengji_game', JSON.stringify({ roomId: this.roomId, seat: this.seat }));
+        }
         this.showScreen('game-screen');
         this.requestGameFullscreen();
         this.updateGameUI();
@@ -476,8 +504,26 @@ const App = {
         this.addChatMessage(msg.nickname, msg.message);
         break;
 
+      case 'left_game':
+        this.roomId = null;
+        this.seat = -1;
+        this.isSitting = false;
+        this.gameState = null;
+        this.myHand = [];
+        localStorage.removeItem('shengji_game');
+        this.showScreen('lobby-screen');
+        break;
+
       case 'error':
         this.showToast(msg.message);
+        // 如果是房间相关错误，清除保存的游戏信息
+        if (msg.message.includes('房间') || msg.message.includes('无法加入')) {
+          localStorage.removeItem('shengji_game');
+          this.roomId = null;
+          this.seat = -1;
+          this.isSitting = false;
+          this.showScreen('lobby-screen');
+        }
         break;
     }
   },

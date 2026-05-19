@@ -507,8 +507,10 @@ class GameEngine {
       }
       if (enteringBidding) {
         this.status = 'bidding';
+        console.log(`[BID] 无主 seat=${seat} isFirstGame=${this.isFirstGame}`);
         if (this.isFirstGame) {
           this.dealer = seat;
+          console.log(`[BID] 无主后 dealer=${this.dealer}`);
         }
       }
       this.trumpSuit = null;
@@ -524,8 +526,10 @@ class GameEngine {
         return { success: false, reason: '首次亮主需要1张级牌+1张王' };
       }
       this.status = 'bidding';
+      console.log(`[BID] 首次亮主 seat=${seat} isFirstGame=${this.isFirstGame}`);
       if (this.isFirstGame) {
         this.dealer = seat;
+        console.log(`[BID] 首次亮主后 dealer=${this.dealer}`);
       }
       this.trumpSuit = levelCards[0].suit;
       this.bids.push({ seat, suit: levelCards[0].suit, levelCount: levelCards.length, jokers: jokerCards, cards: bidCards });
@@ -546,8 +550,10 @@ class GameEngine {
         return { success: false, reason: '需要更多或更大的王' };
       }
       if (enteringBidding) this.status = 'bidding';
+      console.log(`[BID] 反无主 seat=${seat} isFirstGame=${this.isFirstGame} oldDealer=${this.dealer}`);
       if (this.isFirstGame) {
         this.dealer = seat;
+        console.log(`[BID] 反无主后 newDealer=${this.dealer}`);
       }
       this.trumpSuit = null;
       this.bids.push({ seat, suit: null, levelCount: 0, jokers: jokerCards, cards: bidCards });
@@ -567,8 +573,10 @@ class GameEngine {
     }
 
     if (enteringBidding) this.status = 'bidding';
+    console.log(`[BID] 反有主 seat=${seat} isFirstGame=${this.isFirstGame} oldDealer=${this.dealer}`);
     if (this.isFirstGame) {
       this.dealer = seat;
+      console.log(`[BID] 反有主后 newDealer=${this.dealer}`);
     }
     this.trumpSuit = levelCards[0].suit;
     this.bids.push({ seat, suit: levelCards[0].suit, levelCount: levelCards.length, jokers: jokerCards, cards: bidCards });

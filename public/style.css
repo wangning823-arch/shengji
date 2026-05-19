@@ -68,6 +68,14 @@ html, body {
   font-size: 13px;
 }
 
+.btn.exit-btn {
+  background: #c0392b;
+}
+
+.btn.exit-btn:hover {
+  background: #e74c3c;
+}
+
 .btn.hidden {
   display: none;
 }
