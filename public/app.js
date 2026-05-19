@@ -665,7 +665,8 @@ const App = {
     // 更新亮主/反主按钮状态（手牌可能已更新）
     if (gs.status === 'dealing' || gs.status === 'bidding') {
       const isMyTurn = gs.currentSeat === this.seat;
-      if (this.rebidPhase) {
+      const existingBid = gs.bids && gs.bids.length > 0 ? gs.bids[gs.bids.length - 1] : null;
+      if (this.rebidPhase || existingBid) {
         const canRebidNow = isMyTurn && this.canRebid();
         document.getElementById('btn-bid').classList.toggle('hidden', !canRebidNow);
         document.getElementById('btn-bid').textContent = '反主';
@@ -707,7 +708,8 @@ const App = {
     const isMyTurn = seat === this.seat;
 
     if (phase === 'dealing' || phase === 'bidding') {
-      if (rebidPhase) {
+      const existingBid = this.gameState && this.gameState.bids && this.gameState.bids.length > 0 ? this.gameState.bids[this.gameState.bids.length - 1] : null;
+      if (rebidPhase || existingBid) {
         // 反主阶段
         const canRebidNow = isMyTurn && this.canRebid();
         document.getElementById('btn-bid').classList.toggle('hidden', !canRebidNow);
@@ -909,9 +911,9 @@ const App = {
       return;
     }
 
-    // 根据按钮文本来判断是亮主还是反主
-    const btnText = document.getElementById('btn-bid').textContent;
-    const messageType = btnText === '反主' ? 'rebid' : 'bid';
+    // 根据阶段判断发送 bid 还是 rebid（服务端 rebid 仅在 _rebidPhase 时处理，
+    // 非 _rebidPhase 时用 bid 消息走 game.bid() 逻辑）
+    const messageType = this.rebidPhase ? 'rebid' : 'bid';
 
     this.send({ type: messageType, cards: selected.map(c => ({ id: c.id, suit: c.suit, rank: c.rank })) });
     this.selectedCards.clear();

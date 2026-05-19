@@ -1481,7 +1481,7 @@ const messageHandlers = {
     const room = rooms.get(ws.roomId);
     if (!room || !room.gameId) return;
     const game = games.get(room.gameId);
-    if (!game || !game._rebidPhase) return;
+    if (!game || game.bids.length === 0) return;
 
     if (ws.seat !== game.currentSeat) {
       send(ws, { type: 'error', message: '不是你的回合' });
@@ -1493,6 +1493,34 @@ const messageHandlers = {
       return;
     }
 
+    if (!game._rebidPhase) {
+      // 发牌阶段反主：走 bid 逻辑
+      const result = game.bid(ws.seat, msg.cards);
+      if (result.success) {
+        clearDealTimeout(ws.roomId);
+        broadcast(ws.roomId, {
+          type: 'bid_made',
+          seat: ws.seat,
+          trumpSuit: result.trumpSuit,
+          cards: msg.cards
+        });
+        broadcast(ws.roomId, {
+          type: 'turn_changed',
+          seat: game.currentSeat,
+          phase: game.status,
+          bids: game.bids
+        });
+        broadcast(ws.roomId, {
+          type: 'game_state',
+          state: game.toJSON()
+        });
+        handleBidPassResult(ws.roomId, game, { success: true });
+      } else {
+        send(ws, { type: 'error', message: result.reason });
+      }
+      return;
+    }
+
     handleRebidResult(ws.roomId, game, ws.seat, msg.cards);
   },
 
@@ -1501,10 +1529,19 @@ const messageHandlers = {
     const room = rooms.get(ws.roomId);
     if (!room || !room.gameId) return;
     const game = games.get(room.gameId);
-    if (!game || !game._rebidPhase) return;
+    if (!game || game.bids.length === 0) return;
 
     if (ws.seat !== game.currentSeat) {
       send(ws, { type: 'error', message: '不是你的回合' });
+      return;
+    }
+
+    if (!game._rebidPhase) {
+      const result = game.passBid(ws.seat);
+      if (result.success) {
+        clearDealTimeout(ws.roomId);
+        handleBidPassResult(ws.roomId, game, result);
+      }
       return;
     }
 

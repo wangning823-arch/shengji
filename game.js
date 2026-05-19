@@ -6,9 +6,14 @@ const RANK_ORDER = { '3': 0, '4': 1, '5': 2, '6': 3, '7': 4, '8': 5, '9': 6, '10
 const POINT_CARDS = { '5': 5, '10': 10, 'K': 10 };
 
 function getRankFromLevel(level) {
+  level = ((level - 2) % 13) + 2;
   if (level === 2) return RANKS[12];
   if (level >= 3 && level <= 14) return RANKS[level - 3];
   return String(level);
+}
+
+function normalizeLevel(level) {
+  return ((level - 2) % 13) + 2;
 }
 
 function createCard(suit, rank, deckIndex) {
@@ -128,7 +133,14 @@ function isTractor(cards, trumpSuit, trumpLevel) {
       if (Math.abs(trumpRanks[0] - trumpRanks[1]) !== 1) return false;
     } else {
       if (prev.suit !== curr.suit) return false;
-      if (Math.abs(RANK_ORDER[prev.rank] - RANK_ORDER[curr.rank]) !== 1) return false;
+      const orderA = RANK_ORDER[prev.rank];
+      const orderB = RANK_ORDER[curr.rank];
+      const levelOrder = RANK_ORDER[getRankFromLevel(trumpLevel)];
+      let diff = Math.abs(orderA - orderB);
+      if ((orderA < levelOrder && orderB > levelOrder) || (orderA > levelOrder && orderB < levelOrder)) {
+        diff -= 1;
+      }
+      if (diff !== 1) return false;
       if (prev.rank === getRankFromLevel(trumpLevel) || curr.rank === getRankFromLevel(trumpLevel)) return false;
     }
   }
@@ -149,6 +161,113 @@ function getCardPattern(cards, trumpSuit, trumpLevel) {
   }
 
   return { type: 'mix', length: cards.length };
+}
+
+function canBeatSingle(hand, suit, rank, isTrumpCard, trumpSuit, trumpLevel) {
+  const card = { suit, rank };
+  const leadSuit = isTrumpCard ? 'trump' : suit;
+
+  const sameSuitCards = hand.filter(c => {
+    if (isTrumpCard) return isTrump(c, trumpSuit, trumpLevel);
+    return !isTrump(c, trumpSuit, trumpLevel) && c.suit === suit;
+  });
+
+  if (sameSuitCards.length >= 1) {
+    for (const c of sameSuitCards) {
+      if (compareCards(c, card, trumpSuit, trumpLevel, leadSuit) > 0) {
+        return true;
+      }
+    }
+    return false;
+  } else {
+    const trumpCards = hand.filter(c => isTrump(c, trumpSuit, trumpLevel));
+    return trumpCards.length >= 1;
+  }
+}
+
+function canBeatPair(hand, suit, rank, isTrumpCard, trumpSuit, trumpLevel) {
+  const card = { suit, rank };
+  const leadSuit = isTrumpCard ? 'trump' : suit;
+
+  const sameSuitCards = hand.filter(c => {
+    if (isTrumpCard) return isTrump(c, trumpSuit, trumpLevel);
+    return !isTrump(c, trumpSuit, trumpLevel) && c.suit === suit;
+  });
+
+  if (sameSuitCards.length >= 2) {
+    const handGrouped = groupByRank(sameSuitCards);
+    for (const key in handGrouped) {
+      if (handGrouped[key].length >= 2) {
+        const c = handGrouped[key][0];
+        if (compareCards(c, card, trumpSuit, trumpLevel, leadSuit) > 0) {
+          return true;
+        }
+      }
+    }
+    return false;
+  } else {
+    const trumpCards = hand.filter(c => isTrump(c, trumpSuit, trumpLevel));
+    const trumpGrouped = groupByRank(trumpCards);
+    for (const key in trumpGrouped) {
+      if (trumpGrouped[key].length >= 2) {
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
+function isDumpGuaranteedMax(dumpCards, otherPlayers, trumpSuit, trumpLevel) {
+  const grouped = groupByRank(dumpCards);
+
+  for (const key in grouped) {
+    const cards = grouped[key];
+    const suit = cards[0].suit;
+    const rank = cards[0].rank;
+    const isTrumpCard = isTrump(cards[0], trumpSuit, trumpLevel);
+
+    for (const player of otherPlayers) {
+      if (cards.length >= 2) {
+        if (canBeatPair(player.hand, suit, rank, isTrumpCard, trumpSuit, trumpLevel)) {
+          return false;
+        }
+      } else {
+        if (canBeatSingle(player.hand, suit, rank, isTrumpCard, trumpSuit, trumpLevel)) {
+          return false;
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+function getFallbackFromDump(dumpCards, trumpSuit, trumpLevel) {
+  const grouped = groupByRank(dumpCards);
+  const components = [];
+
+  for (const key in grouped) {
+    const cards = grouped[key];
+    if (cards.length >= 2) {
+      components.push({ type: 'pair', cards: cards.slice(0, 2) });
+    } else {
+      components.push({ type: 'single', cards });
+    }
+  }
+
+  components.sort((a, b) => {
+    const aTrump = isTrump(a.cards[0], trumpSuit, trumpLevel);
+    const bTrump = isTrump(b.cards[0], trumpSuit, trumpLevel);
+    if (aTrump && !bTrump) return 1;
+    if (!aTrump && bTrump) return -1;
+    if (aTrump && bTrump) {
+      return getTrumpRank(a.cards[0], trumpSuit, trumpLevel) - getTrumpRank(b.cards[0], trumpSuit, trumpLevel);
+    }
+    if (a.cards[0].suit !== b.cards[0].suit) return 0;
+    return RANK_ORDER[a.cards[0].rank] - RANK_ORDER[b.cards[0].rank];
+  });
+
+  return components[0];
 }
 
 function hasSuit(hand, suit, trumpSuit, trumpLevel) {
@@ -248,6 +367,15 @@ function validatePlay(hand, playedCards, leadCards, trumpSuit, trumpLevel) {
     const handCanTractor = isTractor(handInSuit.slice(0, leadCards.length), trumpSuit, trumpLevel);
     if (handCanTractor && !isTractorPlay) {
       return { valid: false, reason: '有拖拉机必须跟拖拉机' };
+    }
+
+    // 没有拖拉机但有对子，必须跟对子
+    if (!handCanTractor) {
+      const handPairs = Object.values(groupByRank(handInSuit)).filter(g => g.length >= 2);
+      const playedPairs = Object.values(groupByRank(playedInSuit)).filter(g => g.length >= 2);
+      if (handPairs.length > 0 && playedPairs.length === 0) {
+        return { valid: false, reason: '有对子必须跟对子' };
+      }
     }
   }
 
@@ -776,20 +904,27 @@ class GameEngine {
 
     const leadCards = this.currentTrick.length > 0 ? this.currentTrick[0].cards : null;
 
-    // 甩牌违规自动拆最小牌
+    let isDumpMax = false;
     if (!leadCards || leadCards.length === 0) {
       const pattern = getCardPattern(cards, this.trumpSuit, this.trumpLevel);
       if (pattern.type === 'mix') {
-        cards.sort((a, b) => compareCards(a, b, this.trumpSuit, this.trumpLevel, a.suit));
-        const minCard = cards[0];
-        cardIds = [minCard.id];
-        cards = [minCard];
+        const otherPlayers = this.players.filter(p => p.seat !== seat);
+        const isMax = isDumpGuaranteedMax(cards, otherPlayers, this.trumpSuit, this.trumpLevel);
+        if (isMax) {
+          isDumpMax = true;
+        } else {
+          const fallback = getFallbackFromDump(cards, this.trumpSuit, this.trumpLevel);
+          cards = fallback.cards;
+          cardIds = cards.map(c => c.id);
+        }
       }
     }
 
-    const validation = validatePlay(player.hand, cards, leadCards, this.trumpSuit, this.trumpLevel);
-    if (!validation.valid) {
-      return { success: false, reason: validation.reason };
+    if (!isDumpMax) {
+      const validation = validatePlay(player.hand, cards, leadCards, this.trumpSuit, this.trumpLevel);
+      if (!validation.valid) {
+        return { success: false, reason: validation.reason };
+      }
     }
 
     player.hand = player.hand.filter(c => !cardIds.includes(c.id));
@@ -895,18 +1030,18 @@ class GameEngine {
 
     if (idleLevelChange > 0) {
       // 闲家得分>=120，升级并夺庄
-      this.levels[`team${idleTeam}`] += idleLevelChange;
+      this.levels[`team${idleTeam}`] = normalizeLevel(this.levels[`team${idleTeam}`] + idleLevelChange);
       this.dealer = this.players.find(p => p.team === idleTeam).seat;
     } else if (dealerLevelChange > 0) {
       // 庄家守住，升级
-      this.levels[`team${dealerTeam}`] += dealerLevelChange;
+      this.levels[`team${dealerTeam}`] = normalizeLevel(this.levels[`team${dealerTeam}`] + dealerLevelChange);
     } else if (idleScore >= step * 2) {
       // 闲家得分80-119，夺庄但不额外升级
       this.dealer = this.players.find(p => p.team === idleTeam).seat;
     }
     // else: 庄家守住但不升级（40-79分），庄家不变
 
-    this.trumpLevel = this.levels[`team${this.players[this.dealer].team}`];
+    this.trumpLevel = normalizeLevel(this.levels[`team${this.players[this.dealer].team}`]);
 
     return {
       success: true,
