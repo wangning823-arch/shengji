@@ -22,6 +22,11 @@ const App = {
 
   SEAT_LABELS: ['北', '东', '南', '西'],
 
+  getRankFromLevel(level) {
+    if (level === 2) return '2';
+    return this.RANK_ORDER[level - 3] || String(level);
+  },
+
   init() {
     this.bindEvents();
     this.connect();
@@ -482,6 +487,7 @@ const App = {
 
       case 'game_ended':
         this.rebidPhase = false;
+        console.log(`[GAME_ENDED] idleScore=${msg.idleScore} scores=${JSON.stringify(msg.scores)} dealerTeam=${msg.dealerTeam} winner=${msg.winner}`);
         // 取消 trick 清空定时器，让最后一轮出牌保持可见
         if (this._trickClearTimer) {
           clearTimeout(this._trickClearTimer);
@@ -598,6 +604,7 @@ const App = {
     // 只显示闲家得分（庄家不得分）
     const dealerTeam = gs.players[gs.dealer]?.team;
     const idleScore = dealerTeam === 1 ? gs.scores.team2 : gs.scores.team1;
+    console.log(`[UI] dealer=${gs.dealer} dealerTeam=${dealerTeam} scores=${JSON.stringify(gs.scores)} idleScore=${idleScore}`);
     document.getElementById('score-info').textContent = `闲家得分: ${idleScore}分`;
 
     // 显示当前 bids 信息（亮主阶段）
@@ -801,18 +808,18 @@ const App = {
     const isTrump = (c) => {
       if (c.suit === 'joker') return true;
       if (c.rank === '2') return true;
-      if (c.rank === String(trumpLevel)) return true;
-      if (trumpSuit && c.suit === trumpSuit && c.rank !== String(trumpLevel) && c.rank !== '2') return true;
+      if (c.rank === this.getRankFromLevel(trumpLevel)) return true;
+      if (trumpSuit && c.suit === trumpSuit && c.rank !== this.getRankFromLevel(trumpLevel) && c.rank !== '2') return true;
       return false;
     };
 
     const getTrumpRank = (c) => {
       if (c.suit === 'joker') return c.rank === 'big' ? 100 : 99;
-      if (c.rank === String(trumpLevel)) {
+      if (c.rank === this.getRankFromLevel(trumpLevel)) {
         if (c.suit === trumpSuit) return 98;
         return 97;
       }
-      if (c.rank === '2' && String(trumpLevel) !== '2') {
+      if (c.rank === '2' && this.getRankFromLevel(trumpLevel) !== '2') {
         if (c.suit === trumpSuit) return 96;
         return 95;
       }
@@ -844,7 +851,7 @@ const App = {
     if (existingBid) return false;
 
     // 首次亮主：需要1张级牌 + 1张王
-    const trumpLevelStr = String(this.gameState.trumpLevel);
+    const trumpLevelStr = this.getRankFromLevel(this.gameState.trumpLevel);
     const levelCards = this.myHand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
     const jokerCards = this.myHand.filter(c => c.suit === 'joker');
     return levelCards.length >= 1 && jokerCards.length >= 1;
@@ -854,7 +861,7 @@ const App = {
     if (!this.gameState || (this.gameState.status !== 'bidding' && this.gameState.status !== 'dealing')) return false;
     if (!this.gameState.bids || this.gameState.bids.length === 0) return false;
 
-    const trumpLevelStr = String(this.gameState.trumpLevel);
+    const trumpLevelStr = this.getRankFromLevel(this.gameState.trumpLevel);
     const existingBid = this.gameState.bids[this.gameState.bids.length - 1];
 
     // 检查自己是否已经反过主（不能自己反自己的主）
@@ -867,6 +874,7 @@ const App = {
 
     // 反无主：只能纯王，需要更多或更大的王
     if (existingBid.suit === null) {
+      if (levelCards.length > 0) return false;
       if (jokerCards.length < 2) return false;
       const compareJokers = (a, b) => {
         if (a.length !== b.length) return a.length - b.length;
@@ -1228,18 +1236,18 @@ const App = {
     const isTrump = (c) => {
       if (c.suit === 'joker') return true;
       if (c.rank === '2') return true;
-      if (c.rank === String(trumpLevel)) return true;
-      if (trumpSuit && c.suit === trumpSuit && c.rank !== String(trumpLevel) && c.rank !== '2') return true;
+      if (c.rank === this.getRankFromLevel(trumpLevel)) return true;
+      if (trumpSuit && c.suit === trumpSuit && c.rank !== this.getRankFromLevel(trumpLevel) && c.rank !== '2') return true;
       return false;
     };
 
     const getTrumpRank = (c) => {
       if (c.suit === 'joker') return c.rank === 'big' ? 100 : 99;
-      if (c.rank === String(trumpLevel)) {
+      if (c.rank === this.getRankFromLevel(trumpLevel)) {
         if (c.suit === trumpSuit) return 98;
         return 97;
       }
-      if (c.rank === '2' && String(trumpLevel) !== '2') {
+      if (c.rank === '2' && this.getRankFromLevel(trumpLevel) !== '2') {
         if (c.suit === trumpSuit) return 96;
         return 95;
       }

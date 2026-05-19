@@ -2,7 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
-const { GameEngine, isTrump } = require('./game');
+const { GameEngine, isTrump, getRankFromLevel } = require('./game');
 const { LLMAIPlayer, FallbackAI } = require('./llm-ai');
 const db = require('./db');
 
@@ -561,9 +561,7 @@ function handleRebidResult(roomId, game, seat, bidCards) {
 
   if (bidCards) {
     // 有反主，执行反主
-    console.log(`[REBID] handleRebidResult seat=${seat} cards=${bidCards.length}`);
     const result = game.bid(seat, bidCards);
-    console.log(`[REBID] bid result: success=${result.success} reason=${result.reason || 'none'} dealer=${game.dealer}`);
     if (result.success) {
       broadcast(roomId, {
         type: 'bid_made',
@@ -627,7 +625,6 @@ function handleRebidResult(roomId, game, seat, bidCards) {
 // 确认主牌并进入扣底阶段
 function confirmAndEnterBottom(roomId, game) {
   game._rebidPhase = false;
-  console.log(`[CONFIRM] dealer=${game.dealer} isFirstGame=${game.isFirstGame} bids=${game.bids.length}`);
 
   const confirmResult = game.confirmTrump();
   broadcast(roomId, {
@@ -693,7 +690,7 @@ async function handleAIRebid(roomId, game, seat) {
 
   // AI 决定反主的牌
   const player = game.players[seat];
-  const trumpLevelStr = String(game.trumpLevel);
+  const trumpLevelStr = getRankFromLevel(game.trumpLevel);
   const existingBid = game.bids[game.bids.length - 1];
 
   const levelCards = player.hand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');

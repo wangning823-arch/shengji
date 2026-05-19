@@ -2,7 +2,8 @@ const { LLMClient } = require('./llm-client');
 const {
   validatePlay, getCardPattern, isTrump, compareCards,
   isPlayBeating, findWinningCard, getMaxCard, isTractor,
-  groupByRank, getTrumpRank, RANK_ORDER, POINT_CARDS, getRoundPoints
+  groupByRank, getTrumpRank, RANK_ORDER, POINT_CARDS, getRoundPoints,
+  getRankFromLevel
 } = require('./game');
 const {
   AdvancedAI, evaluateCardValue, evaluateHandStrength,
@@ -404,7 +405,7 @@ class CandidateGenerator {
 
   static cardStrengthValue(card, trumpSuit, trumpLevel) {
     if (card.suit === 'joker') return card.rank === 'big' ? 100 : 99;
-    if (card.rank === String(trumpLevel)) {
+    if (card.rank === getRankFromLevel(trumpLevel)) {
       if (card.suit === trumpSuit) return 98;
       return 97;
     }
@@ -698,7 +699,7 @@ class FallbackAI {
   }
 
   static decideBid(hand, trumpLevel) {
-    const levelCards = hand.filter(c => c.rank === String(trumpLevel));
+    const levelCards = hand.filter(c => c.rank === getRankFromLevel(trumpLevel));
     if (levelCards.length >= 2) {
       const suitCounts = {};
       for (const c of levelCards) {

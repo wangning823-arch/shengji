@@ -5,6 +5,12 @@ const RANKS = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2']
 const RANK_ORDER = { '3': 0, '4': 1, '5': 2, '6': 3, '7': 4, '8': 5, '9': 6, '10': 7, 'J': 8, 'Q': 9, 'K': 10, 'A': 11, '2': 12 };
 const POINT_CARDS = { '5': 5, '10': 10, 'K': 10 };
 
+function getRankFromLevel(level) {
+  if (level === 2) return RANKS[12];
+  if (level >= 3 && level <= 14) return RANKS[level - 3];
+  return String(level);
+}
+
 function createCard(suit, rank, deckIndex) {
   return { suit, rank, id: `${suit}_${rank}_${deckIndex}`, deckIndex };
 }
@@ -41,8 +47,8 @@ function getBottomCardCount(deckCount) {
 function isTrump(card, trumpSuit, trumpLevel) {
   if (card.suit === 'joker') return true;
   if (card.rank === '2') return true;
-  if (card.rank === String(trumpLevel)) return true;
-  if (trumpSuit && card.suit === trumpSuit && card.rank !== String(trumpLevel) && card.rank !== '2') return true;
+  if (card.rank === getRankFromLevel(trumpLevel)) return true;
+  if (trumpSuit && card.suit === trumpSuit && card.rank !== getRankFromLevel(trumpLevel) && card.rank !== '2') return true;
   return false;
 }
 
@@ -50,11 +56,11 @@ function getTrumpRank(card, trumpSuit, trumpLevel) {
   if (card.suit === 'joker') {
     return card.rank === 'big' ? 100 : 99;
   }
-  if (card.rank === String(trumpLevel)) {
+  if (card.rank === getRankFromLevel(trumpLevel)) {
     if (card.suit === trumpSuit) return 98;
     return 97;
   }
-  if (card.rank === '2' && String(trumpLevel) !== '2') {
+  if (card.rank === '2' && getRankFromLevel(trumpLevel) !== '2') {
     if (card.suit === trumpSuit) return 96;
     return 95;
   }
@@ -123,7 +129,7 @@ function isTractor(cards, trumpSuit, trumpLevel) {
     } else {
       if (prev.suit !== curr.suit) return false;
       if (Math.abs(RANK_ORDER[prev.rank] - RANK_ORDER[curr.rank]) !== 1) return false;
-      if (prev.rank === String(trumpLevel) || curr.rank === String(trumpLevel)) return false;
+      if (prev.rank === getRankFromLevel(trumpLevel) || curr.rank === getRankFromLevel(trumpLevel)) return false;
     }
   }
 
@@ -466,7 +472,7 @@ class GameEngine {
     const bidCards = cards.map(c => player.hand.find(h => h.id === c.id)).filter(Boolean);
     if (bidCards.length === 0) return { success: false, reason: '无效的牌' };
 
-    const trumpLevelStr = String(this.trumpLevel);
+    const trumpLevelStr = getRankFromLevel(this.trumpLevel);
 
     // 分类：级牌、王、其他牌
     const levelCards = bidCards.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
@@ -507,10 +513,8 @@ class GameEngine {
       }
       if (enteringBidding) {
         this.status = 'bidding';
-        console.log(`[BID] 无主 seat=${seat} isFirstGame=${this.isFirstGame}`);
         if (this.isFirstGame) {
           this.dealer = seat;
-          console.log(`[BID] 无主后 dealer=${this.dealer}`);
         }
       }
       this.trumpSuit = null;
@@ -526,10 +530,8 @@ class GameEngine {
         return { success: false, reason: '首次亮主需要1张级牌+1张王' };
       }
       this.status = 'bidding';
-      console.log(`[BID] 首次亮主 seat=${seat} isFirstGame=${this.isFirstGame}`);
       if (this.isFirstGame) {
         this.dealer = seat;
-        console.log(`[BID] 首次亮主后 dealer=${this.dealer}`);
       }
       this.trumpSuit = levelCards[0].suit;
       this.bids.push({ seat, suit: levelCards[0].suit, levelCount: levelCards.length, jokers: jokerCards, cards: bidCards });
@@ -550,10 +552,8 @@ class GameEngine {
         return { success: false, reason: '需要更多或更大的王' };
       }
       if (enteringBidding) this.status = 'bidding';
-      console.log(`[BID] 反无主 seat=${seat} isFirstGame=${this.isFirstGame} oldDealer=${this.dealer}`);
       if (this.isFirstGame) {
         this.dealer = seat;
-        console.log(`[BID] 反无主后 newDealer=${this.dealer}`);
       }
       this.trumpSuit = null;
       this.bids.push({ seat, suit: null, levelCount: 0, jokers: jokerCards, cards: bidCards });
@@ -573,10 +573,8 @@ class GameEngine {
     }
 
     if (enteringBidding) this.status = 'bidding';
-    console.log(`[BID] 反有主 seat=${seat} isFirstGame=${this.isFirstGame} oldDealer=${this.dealer}`);
     if (this.isFirstGame) {
       this.dealer = seat;
-      console.log(`[BID] 反有主后 newDealer=${this.dealer}`);
     }
     this.trumpSuit = levelCards[0].suit;
     this.bids.push({ seat, suit: levelCards[0].suit, levelCount: levelCards.length, jokers: jokerCards, cards: bidCards });
@@ -625,7 +623,7 @@ class GameEngine {
     if (this.status !== 'dealing' && this.status !== 'bidding') return false;
 
     const player = this.players[seat];
-    const trumpLevelStr = String(this.trumpLevel);
+    const trumpLevelStr = getRankFromLevel(this.trumpLevel);
     const existingBid = this.bids.length > 0 ? this.bids[this.bids.length - 1] : null;
 
     // 检查自己是否已经亮过主（不能自己反自己的主）
@@ -682,13 +680,14 @@ class GameEngine {
       return false;
     }
 
-    const trumpLevelStr = String(this.trumpLevel);
+    const trumpLevelStr = getRankFromLevel(this.trumpLevel);
 
     const levelCards = player.hand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
     const jokerCards = player.hand.filter(c => c.suit === 'joker');
 
-    // 无主情况：需要更多或更大的王
+    // 反无主：只能纯王，需要更多或更大的王
     if (existingBid.suit === null) {
+      if (levelCards.length > 0) return false;
       if (jokerCards.length < 2) return false;
       const compareJokers = (a, b) => {
         if (a.length !== b.length) return a.length - b.length;
@@ -697,7 +696,12 @@ class GameEngine {
       return compareJokers(jokerCards, existingBid.jokers || []) > 0;
     }
 
-    // 有主情况：需要比当前多1张级牌 + 1张王
+    // 反有主为无主：2张王即可
+    if (levelCards.length === 0 && jokerCards.length >= 2) {
+      return true;
+    }
+
+    // 反有主：需要比当前多1张级牌 + 1张王
     if (jokerCards.length === 0) return false;
     const existingLevelCount = existingBid.levelCount || 0;
     return levelCards.length >= existingLevelCount + 1;
@@ -806,6 +810,7 @@ class GameEngine {
       this.currentTrick = [];
 
       const isEnd = this.players.every(p => p.hand.length === 0);
+      console.log(`[PLAY] isEnd=${isEnd} scores=${JSON.stringify(this.scores)} lastWinnerTeam=${winnerTeam}`);
       if (isEnd) {
         return this.endRound();
       }
@@ -837,6 +842,7 @@ class GameEngine {
     let bottomPoints = getRoundPoints(this.bottomCards);
     let bottomMultiplier = 1;
 
+    console.log(`[ENDROUND] dealer=${this.dealer} dealerTeam=${dealerTeam} scores=${JSON.stringify(this.scores)} bottomPoints=${bottomPoints} lastWinnerTeam=${lastWinnerTeam}`);
     // 抠底翻倍：如果最后一轮用拖拉机赢，底分翻倍数
     if (lastTrick && lastWinnerTeam !== dealerTeam) {
       const winnerPlay = lastTrick.plays.find(t => t.seat === lastTrick.winnerSeat);
@@ -849,9 +855,11 @@ class GameEngine {
       }
       if (lastWinnerTeam === 1) this.scores.team1 += bottomPoints;
       else this.scores.team2 += bottomPoints;
+      console.log(`[ENDROUND] 抠底后 scores=${JSON.stringify(this.scores)}`);
     }
 
     const idleScore = dealerTeam === 1 ? this.scores.team2 : this.scores.team1;
+    console.log(`[ENDROUND] idleScore=${idleScore}`);
 
     const steps = getUpgradeSteps(idleScore, this.totalScore, this.deckCount);
 
@@ -933,6 +941,7 @@ module.exports = {
   RANKS,
   RANK_ORDER,
   POINT_CARDS,
+  getRankFromLevel,
   isTrump,
   compareCards,
   getCardPattern,
