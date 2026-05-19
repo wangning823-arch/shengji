@@ -704,9 +704,23 @@ async function handleAIRebid(roomId, game, seat) {
       bidCards = jokerCards.slice(0, 2);
     }
   } else {
-    // 有主情况：需要比当前多1张级牌 + 1张王
-    if (jokerCards.length > 0 && levelCards.length >= (existingBid.levelCount || 0) + 1) {
-      bidCards = [...levelCards.slice(0, (existingBid.levelCount || 0) + 1), jokerCards[0]];
+    // 有主情况：需要比当前多1张同花色级牌 + 1张王
+    if (jokerCards.length > 0) {
+      const needed = (existingBid.levelCount || 0) + 1;
+      const bySuit = {};
+      for (const c of levelCards) {
+        if (!bySuit[c.suit]) bySuit[c.suit] = [];
+        bySuit[c.suit].push(c);
+      }
+      let bestSuitCards = null;
+      for (const suitCards of Object.values(bySuit)) {
+        if (suitCards.length >= needed && (!bestSuitCards || suitCards.length > bestSuitCards.length)) {
+          bestSuitCards = suitCards;
+        }
+      }
+      if (bestSuitCards) {
+        bidCards = [...bestSuitCards.slice(0, needed), jokerCards[0]];
+      }
     }
   }
 

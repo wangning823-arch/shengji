@@ -662,10 +662,16 @@ class GameEngine {
       return compareJokers(jokerCards, existingBid.jokers || []) > 0;
     }
 
-    // 反有主：需要比当前多1张级牌 + 1张王
+    // 反有主：需要比当前多1张同花色级牌 + 1张王
     if (jokerCards.length === 0) return false;
     const existingLevelCount = existingBid.levelCount || 0;
-    return levelCards.length >= existingLevelCount + 1;
+    const levelCardsBySuit = {};
+    for (const c of levelCards) {
+      if (!levelCardsBySuit[c.suit]) levelCardsBySuit[c.suit] = 0;
+      levelCardsBySuit[c.suit]++;
+    }
+    const maxSameSuitLevelCount = Math.max(0, ...Object.values(levelCardsBySuit));
+    return maxSameSuitLevelCount >= existingLevelCount + 1;
   }
 
   canRebid(seat) {
@@ -701,10 +707,16 @@ class GameEngine {
       return true;
     }
 
-    // 反有主：需要比当前多1张级牌 + 1张王
+    // 反有主：需要比当前多1张同花色级牌 + 1张王
     if (jokerCards.length === 0) return false;
     const existingLevelCount = existingBid.levelCount || 0;
-    return levelCards.length >= existingLevelCount + 1;
+    const levelCardsBySuit = {};
+    for (const c of levelCards) {
+      if (!levelCardsBySuit[c.suit]) levelCardsBySuit[c.suit] = 0;
+      levelCardsBySuit[c.suit]++;
+    }
+    const maxSameSuitLevelCount = Math.max(0, ...Object.values(levelCardsBySuit));
+    return maxSameSuitLevelCount >= existingLevelCount + 1;
   }
 
   confirmTrump() {
@@ -856,6 +868,12 @@ class GameEngine {
       if (lastWinnerTeam === 1) this.scores.team1 += bottomPoints;
       else this.scores.team2 += bottomPoints;
       console.log(`[ENDROUND] 抠底后 scores=${JSON.stringify(this.scores)}`);
+    }
+
+    // 如果庄家守住底牌，底牌得分不计入，显示为0
+    if (lastWinnerTeam === dealerTeam) {
+      bottomPoints = 0;
+      bottomMultiplier = 1;
     }
 
     const idleScore = dealerTeam === 1 ? this.scores.team2 : this.scores.team1;

@@ -888,10 +888,16 @@ const App = {
       return true;
     }
 
-    // 反有主：需要比当前多1张级牌 + 1张王
+    // 反有主：需要比当前多1张同花色级牌 + 1张王
     if (jokerCards.length === 0) return false;
     const existingLevelCount = existingBid.levelCount || 0;
-    return levelCards.length >= existingLevelCount + 1;
+    const levelCardsBySuit = {};
+    for (const c of levelCards) {
+      if (!levelCardsBySuit[c.suit]) levelCardsBySuit[c.suit] = 0;
+      levelCardsBySuit[c.suit]++;
+    }
+    const maxSameSuitLevelCount = Math.max(0, ...Object.values(levelCardsBySuit));
+    return maxSameSuitLevelCount >= existingLevelCount + 1;
   },
 
   bid() {
