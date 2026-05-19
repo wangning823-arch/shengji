@@ -515,7 +515,7 @@ function getUpgradeSteps(score, totalScore, deckCount) {
 }
 
 class GameEngine {
-  constructor(roomId, deckCount = 2, players = [], dealer = 0, trumpLevel = 2, isFirstGame = true) {
+  constructor(roomId, deckCount = 2, players = [], dealer = 0, levels = null, isFirstGame = true) {
     this.id = uuidv4();
     this.roomId = roomId;
     this.deckCount = deckCount;
@@ -523,7 +523,6 @@ class GameEngine {
     this.dealer = dealer;
     this.isFirstGame = isFirstGame;
     this.trumpSuit = null;
-    this.trumpLevel = trumpLevel;
     this.status = 'waiting';
     this.bottomCards = [];
     this.currentTrick = [];
@@ -531,7 +530,8 @@ class GameEngine {
     this.currentSeat = 0;
     this.tricks = []; // 完整的牌局记录
     this.scores = { team1: 0, team2: 0 };
-    this.levels = { team1: trumpLevel, team2: trumpLevel };
+    this.levels = levels || { team1: 2, team2: 2 };
+    this.trumpLevel = this.levels[`team${this.players[dealer].team}`] || 2;
     this.bids = [];
     this.totalScore = deckCount * 100;
     this.bidRoundStartSeat = dealer;
@@ -1075,7 +1075,7 @@ class GameEngine {
       currentTrick: this.currentTrick,
       tricksCount: this.tricks.length,
       bottomCount: this.bottomCards.length,
-      bottomCards: seat === this.dealer && this.status === 'taking_bottom' ? this.bottomCards : undefined,
+      bottomCards: seat === this.dealer && (this.status === 'taking_bottom' || this.status === 'playing') ? this.bottomCards : undefined,
       players: this.players.map(p => ({
         seat: p.seat,
         team: p.team,

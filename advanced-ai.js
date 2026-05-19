@@ -135,6 +135,7 @@ function findTractors(hand, trumpSuit, trumpLevel) {
  */
 function analyzeGameState(hand, gameState, seat, team, cardTracker) {
   const analysis = {
+    myTeam: team,
     myStrength: evaluateHandStrength(hand, gameState.trumpSuit, gameState.trumpLevel),
     myTrumps: hand.filter(c => isTrump(c, gameState.trumpSuit, gameState.trumpLevel)).length,
     myPairs: findPairs(hand, gameState.trumpSuit, gameState.trumpLevel).length,
@@ -158,6 +159,30 @@ function analyzeGameState(hand, gameState, seat, team, cardTracker) {
     const leadSeat = currentTrick[0].seat;
     const leadTeam = gameState.players[leadSeat]?.team;
     analysis.leadIsTeammate = leadTeam === team;
+
+    // 判断AI是否最后一个出牌
+    const totalPlayers = gameState.players.length;
+    analysis.isLastPlayer = currentTrick.length === totalPlayers - 1;
+
+    // 检测场上是否有人将吃
+    const leadSuit0 = currentTrick[0].cards[0].suit;
+    const leadIsTrump0 = isTrump(currentTrick[0].cards[0], gameState.trumpSuit, gameState.trumpLevel);
+    analysis.currentChopper = null; // 将吃者的seat
+    for (let i = 1; i < currentTrick.length; i++) {
+      const play = currentTrick[i];
+      const hasSameSuit = play.cards.some(c => {
+        if (leadIsTrump0) return isTrump(c, gameState.trumpSuit, gameState.trumpLevel);
+        return !isTrump(c, gameState.trumpSuit, gameState.trumpLevel) && c.suit === leadSuit0;
+      });
+      const hasTrump = play.cards.some(c => isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
+      if (!hasSameSuit && hasTrump) {
+        analysis.currentChopper = play.seat;
+        analysis.currentChopperTeam = gameState.players[play.seat]?.team;
+        // 记录将吃者出的主牌（用于比较大小）
+        analysis.currentChopperTrumps = play.cards.filter(c => isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
+        break;
+      }
+    }
 
     // 判断当前赢家
     const leadSuit = currentTrick[0].cards[0].suit;
@@ -199,15 +224,16 @@ function analyzeGameState(hand, gameState, seat, team, cardTracker) {
 
 /**
  * 生成将吃候选牌
- * 从otherCards中筛选主牌，并根据首家牌型匹配将吃牌型
  * @param {Array} otherCards - 非首家花色的手牌
  * @param {Array} leadCards - 首家出的牌
  * @param {Object} gameState - 游戏状态
  * @param {number} baseScore - 将吃基础评分
  * @param {number} trickPoints - 场上分牌总价值
+ * @param {boolean} isLastPlayer - 是否最后一个出牌
+ * @param {Object} analysis - 局势分析（含currentChopper等信息）
  * @returns {Array} 将吃候选列表
  */
-function generateChopCandidates(otherCards, leadCards, gameState, baseScore, trickPoints) {
+function generateChopCandidates(otherCards, leadCards, gameState, baseScore, trickPoints, isLastPlayer, analysis) {
   const candidates = [];
   const trumpSuit = gameState.trumpSuit;
   const trumpLevel = gameState.trumpLevel;
@@ -219,68 +245,232 @@ function generateChopCandidates(otherCards, leadCards, gameState, baseScore, tri
   const leadPattern = getCardPattern(leadCards, trumpSuit, trumpLevel);
   const chopScore = baseScore + trickPoints * 3;
 
-  if (leadPattern.type === 'single') {
-    // 单张 → 出最小单主将吃
+  // 非末家：出最大主牌将吃（防止下家管住）
+  if (!isLastPlayer) {
+    return _generateChopCandidatesMax(trumpCards, leadCards, leadPattern, chopScore, trumpSuit, trumpLevel, candidates);
+  }
+
+  // === 末家将吃逻辑 ===
+
+  // 场上有人将吃（上家将吃了）
+  if (analysis && analysis.currentChopper !== null) {
+    const chopperIsTeammate = analysis.currentChopperTeam === analysis.myTeam;
+
+    if (chopperIsTeammate) {
+      // 队友将吃了 → 不需要再管，垫牌即可（不生成将吃候选）
+      return candidates;
+    }
+
+    // 对手将吃了 → 尝试出更大的主牌将吃
+    const biggerChopCandidates = _generateChopCandidatesBiggerThan(
+      trumpCards, leadCards, leadPattern, chopScore + 20,
+      trumpSuit, trumpLevel, analysis.currentChopperTrumps
+    );
+    if (biggerChopCandidates.length > 0) {
+      candidates.push(...biggerChopCandidates);
+      return candidates;
+    }
+
+    // 没有更大的主牌 → 垫最小非分副牌
+    const nonTrumpNonPoint = otherCards.filter(c =>
+      !isTrump(c, trumpSuit, trumpLevel) && !POINT_CARDS[c.rank]
+    );
+    if (nonTrumpNonPoint.length > 0) {
+      nonTrumpNonPoint.sort((a, b) =>
+        evaluateCardValue(a, trumpSuit, trumpLevel) - evaluateCardValue(b, trumpSuit, trumpLevel)
+      );
+      candidates.push({ cards: [nonTrumpNonPoint[0]], score: 60, reason: '垫最小非分副牌' });
+      return candidates;
+    }
+
+    // 副牌都是分 → 出最小主牌
+    const nonPointTrumps = trumpCards.filter(c => !POINT_CARDS[c.rank]);
+    if (nonPointTrumps.length > 0) {
+      nonPointTrumps.sort((a, b) =>
+        evaluateCardValue(a, trumpSuit, trumpLevel) - evaluateCardValue(b, trumpSuit, trumpLevel)
+      );
+      candidates.push({ cards: [nonPointTrumps[0]], score: 55, reason: '垫最小非分主牌' });
+      return candidates;
+    }
+
+    // 主牌都是分 → 出最小主牌
     trumpCards.sort((a, b) =>
       evaluateCardValue(a, trumpSuit, trumpLevel) - evaluateCardValue(b, trumpSuit, trumpLevel)
     );
-    candidates.push({
-      cards: [trumpCards[0]],
-      score: chopScore,
-      reason: '单主将吃'
-    });
+    candidates.push({ cards: [trumpCards[0]], score: 50, reason: '垫最小主牌' });
+    return candidates;
+  }
+
+  // 场上无人将吃 → 优先用主分牌将吃，没有主分才用最小主牌
+  return _generateChopCandidatesLastPlayer(
+    trumpCards, leadCards, leadPattern, chopScore,
+    trumpSuit, trumpLevel, candidates
+  );
+}
+
+/**
+ * 非末家将吃：出最大主牌
+ */
+function _generateChopCandidatesMax(trumpCards, leadCards, leadPattern, chopScore, trumpSuit, trumpLevel, candidates) {
+  trumpCards.sort((a, b) =>
+    evaluateCardValue(b, trumpSuit, trumpLevel) - evaluateCardValue(a, trumpSuit, trumpLevel)
+  );
+
+  if (leadPattern.type === 'single') {
+    candidates.push({ cards: [trumpCards[0]], score: chopScore, reason: '单主将吃(大牌)' });
   } else if (leadPattern.type === 'pair') {
-    // 对子 → 从主牌中找对主将吃
     const trumpPairs = findPairs(trumpCards);
     if (trumpPairs.length > 0) {
       trumpPairs.sort((a, b) =>
-        evaluateCardValue(a[0], trumpSuit, trumpLevel) - evaluateCardValue(b[0], trumpSuit, trumpLevel)
+        evaluateCardValue(b[0], trumpSuit, trumpLevel) - evaluateCardValue(a[0], trumpSuit, trumpLevel)
       );
-      candidates.push({
-        cards: trumpPairs[0],
-        score: chopScore,
-        reason: '对主将吃'
-      });
+      candidates.push({ cards: trumpPairs[0], score: chopScore, reason: '对主将吃(大牌)' });
     }
-    // 没有主牌对子，无法有效将吃
   } else if (leadPattern.type === 'tractor') {
-    // 拖拉机 → 从主牌中找拖拉机将吃
     const trumpTractors = findTractors(trumpCards, trumpSuit, trumpLevel);
-    const matchedTractors = trumpTractors.filter(t => t.length >= leadCards.length);
-    if (matchedTractors.length > 0) {
-      matchedTractors.sort((a, b) =>
+    const matched = trumpTractors.filter(t => t.length >= leadCards.length);
+    if (matched.length > 0) {
+      matched.sort((a, b) =>
+        evaluateCardValue(b[0], trumpSuit, trumpLevel) - evaluateCardValue(a[0], trumpSuit, trumpLevel)
+      );
+      candidates.push({ cards: matched[0].slice(0, leadCards.length), score: chopScore, reason: '拖拉机主将吃(大牌)' });
+    }
+    const trumpPairs = findPairs(trumpCards);
+    if (trumpPairs.length > 0 && leadCards.length >= 2) {
+      trumpPairs.sort((a, b) =>
+        evaluateCardValue(b[0], trumpSuit, trumpLevel) - evaluateCardValue(a[0], trumpSuit, trumpLevel)
+      );
+      candidates.push({ cards: trumpPairs[0], score: chopScore - 20, reason: '对主部分将吃(大牌)' });
+    }
+  } else {
+    const playCards = trumpCards.slice(0, leadCards.length);
+    if (playCards.length > 0) {
+      candidates.push({ cards: playCards, score: chopScore, reason: '主牌将吃(大牌)' });
+    }
+  }
+  return candidates;
+}
+
+/**
+ * 末家将吃（无人将吃）：优先主分牌，否则最小主牌
+ */
+function _generateChopCandidatesLastPlayer(trumpCards, leadCards, leadPattern, chopScore, trumpSuit, trumpLevel, candidates) {
+  if (leadPattern.type === 'single') {
+    // 优先出主分牌将吃
+    const trumpPointCards = trumpCards.filter(c => POINT_CARDS[c.rank]);
+    if (trumpPointCards.length > 0) {
+      trumpPointCards.sort((a, b) =>
+        (POINT_CARDS[b.rank] || 0) - (POINT_CARDS[a.rank] || 0)
+      );
+      candidates.push({ cards: [trumpPointCards[0]], score: chopScore + 5, reason: '主分将吃(末家)' });
+    }
+    // 没有主分 → 最小主牌
+    trumpCards.sort((a, b) =>
+      evaluateCardValue(a, trumpSuit, trumpLevel) - evaluateCardValue(b, trumpSuit, trumpLevel)
+    );
+    candidates.push({ cards: [trumpCards[0]], score: chopScore, reason: '单主将吃(末家)' });
+  } else if (leadPattern.type === 'pair') {
+    const trumpPairs = findPairs(trumpCards);
+    if (trumpPairs.length > 0) {
+      // 优先出主分对
+      const pointPairs = trumpPairs.filter(p => POINT_CARDS[p[0].rank]);
+      if (pointPairs.length > 0) {
+        pointPairs.sort((a, b) =>
+          (POINT_CARDS[b[0].rank] || 0) - (POINT_CARDS[a[0].rank] || 0)
+        );
+        candidates.push({ cards: pointPairs[0], score: chopScore + 5, reason: '主分对将吃(末家)' });
+      }
+      // 没有主分对 → 最小主对
+      trumpPairs.sort((a, b) =>
         evaluateCardValue(a[0], trumpSuit, trumpLevel) - evaluateCardValue(b[0], trumpSuit, trumpLevel)
       );
-      candidates.push({
-        cards: matchedTractors[0].slice(0, leadCards.length),
-        score: chopScore,
-        reason: '拖拉机主将吃'
-      });
+      candidates.push({ cards: trumpPairs[0], score: chopScore, reason: '对主将吃(末家)' });
     }
-    // 没有匹配的拖拉机，尝试对主将吃（部分将吃）
+  } else if (leadPattern.type === 'tractor') {
+    const trumpTractors = findTractors(trumpCards, trumpSuit, trumpLevel);
+    const matched = trumpTractors.filter(t => t.length >= leadCards.length);
+    if (matched.length > 0) {
+      matched.sort((a, b) =>
+        evaluateCardValue(a[0], trumpSuit, trumpLevel) - evaluateCardValue(b[0], trumpSuit, trumpLevel)
+      );
+      candidates.push({ cards: matched[0].slice(0, leadCards.length), score: chopScore, reason: '拖拉机主将吃(末家)' });
+    }
     const trumpPairs = findPairs(trumpCards);
     if (trumpPairs.length > 0 && leadCards.length >= 2) {
       trumpPairs.sort((a, b) =>
         evaluateCardValue(a[0], trumpSuit, trumpLevel) - evaluateCardValue(b[0], trumpSuit, trumpLevel)
       );
-      candidates.push({
-        cards: trumpPairs[0],
-        score: chopScore - 20,
-        reason: '对主部分将吃'
-      });
+      candidates.push({ cards: trumpPairs[0], score: chopScore - 20, reason: '对主部分将吃(末家)' });
     }
   } else {
-    // mix类型 → 有主牌就算将吃
+    // mix类型 → 优先出主分牌
+    const trumpPointCards = trumpCards.filter(c => POINT_CARDS[c.rank]);
+    const playCards = [];
+    if (trumpPointCards.length > 0) {
+      trumpPointCards.sort((a, b) =>
+        (POINT_CARDS[b.rank] || 0) - (POINT_CARDS[a.rank] || 0)
+      );
+      playCards.push(...trumpPointCards);
+    }
     trumpCards.sort((a, b) =>
       evaluateCardValue(a, trumpSuit, trumpLevel) - evaluateCardValue(b, trumpSuit, trumpLevel)
     );
-    const playCards = trumpCards.slice(0, leadCards.length);
+    for (const c of trumpCards) {
+      if (!playCards.some(p => p.id === c.id) && playCards.length < leadCards.length) {
+        playCards.push(c);
+      }
+    }
     if (playCards.length > 0) {
-      candidates.push({
-        cards: playCards,
-        score: chopScore,
-        reason: '主牌将吃'
-      });
+      candidates.push({ cards: playCards.slice(0, leadCards.length), score: chopScore, reason: '主牌将吃(末家)' });
+    }
+  }
+  return candidates;
+}
+
+/**
+ * 生成比上家将吃更大的将吃候选
+ */
+function _generateChopCandidatesBiggerThan(trumpCards, leadCards, leadPattern, chopScore, trumpSuit, trumpLevel, chopperTrumps) {
+  const candidates = [];
+
+  if (leadPattern.type === 'single') {
+    // 找比将吃者最大主牌更大的单主
+    const chopperMax = getMaxCard(chopperTrumps, trumpSuit, trumpLevel, 'trump');
+    trumpCards.sort((a, b) =>
+      evaluateCardValue(a, trumpSuit, trumpLevel) - evaluateCardValue(b, trumpSuit, trumpLevel)
+    );
+    for (const card of trumpCards) {
+      if (compareCards(card, chopperMax, trumpSuit, trumpLevel, 'trump') > 0) {
+        candidates.push({ cards: [card], score: chopScore, reason: '超将吃' });
+        break; // 出最小的能赢的主牌
+      }
+    }
+  } else if (leadPattern.type === 'pair') {
+    const trumpPairs = findPairs(trumpCards);
+    const chopperMax = getMaxCard(chopperTrumps, trumpSuit, trumpLevel, 'trump');
+    trumpPairs.sort((a, b) =>
+      evaluateCardValue(a[0], trumpSuit, trumpLevel) - evaluateCardValue(b[0], trumpSuit, trumpLevel)
+    );
+    for (const pair of trumpPairs) {
+      const pairMax = getMaxCard(pair, trumpSuit, trumpLevel, 'trump');
+      if (compareCards(pairMax, chopperMax, trumpSuit, trumpLevel, 'trump') > 0) {
+        candidates.push({ cards: pair, score: chopScore, reason: '超对主将吃' });
+        break;
+      }
+    }
+  } else if (leadPattern.type === 'tractor') {
+    const trumpTractors = findTractors(trumpCards, trumpSuit, trumpLevel);
+    const matched = trumpTractors.filter(t => t.length >= leadCards.length);
+    const chopperMax = getMaxCard(chopperTrumps, trumpSuit, trumpLevel, 'trump');
+    matched.sort((a, b) =>
+      evaluateCardValue(a[0], trumpSuit, trumpLevel) - evaluateCardValue(b[0], trumpSuit, trumpLevel)
+    );
+    for (const tractor of matched) {
+      const tractorMax = getMaxCard(tractor, trumpSuit, trumpLevel, 'trump');
+      if (compareCards(tractorMax, chopperMax, trumpSuit, trumpLevel, 'trump') > 0) {
+        candidates.push({ cards: tractor.slice(0, leadCards.length), score: chopScore, reason: '超拖拉机将吃' });
+        break;
+      }
     }
   }
 
@@ -291,119 +481,114 @@ function generateChopCandidates(otherCards, leadCards, gameState, baseScore, tri
 
 /**
  * 首家出牌策略
+ * 核心原则：先出有把握的副牌大牌，再清主，大王保留保底
  */
 function selectLeadPlay(hand, gameState, seat, team, cardTracker) {
   const analysis = analyzeGameState(hand, gameState, seat, team, cardTracker);
   const candidates = [];
+  const ts = gameState.trumpSuit;
+  const tl = gameState.trumpLevel;
 
-  // 1. 拖拉机（最强）
-  const tractors = findTractors(hand, gameState.trumpSuit, gameState.trumpLevel);
-  if (tractors.length > 0) {
-    // 选择最长的拖拉机
-    tractors.sort((a, b) => b.length - a.length);
-    candidates.push({
-      cards: tractors[0],
-      score: 100 + tractors[0].length * 10,
-      reason: '出拖拉机抢分'
-    });
+  // 分类手牌
+  const trumps = hand.filter(c => isTrump(c, ts, tl));
+  const nonTrumps = hand.filter(c => !isTrump(c, ts, tl));
+
+  // 1. 副牌A对子（确定大的牌先出）
+  const nonTrumpPairs = findPairs(nonTrumps);
+  const acePairs = nonTrumpPairs.filter(p => p[0].rank === 'A');
+  for (const pair of acePairs) {
+    candidates.push({ cards: pair, score: 120, reason: '出副牌A对' });
   }
 
-  // 2. 对子
-  const pairs = findPairs(hand, gameState.trumpSuit, gameState.trumpLevel);
-  if (pairs.length > 0) {
-    // 按牌力排序，选择最强的对子
-    pairs.sort((a, b) => evaluateCardValue(b[0], gameState.trumpSuit, gameState.trumpLevel) -
-                       evaluateCardValue(a[0], gameState.trumpSuit, gameState.trumpLevel));
-
-    for (const pair of pairs.slice(0, 3)) {
-      const value = evaluateCardValue(pair[0], gameState.trumpSuit, gameState.trumpLevel);
-      const isTrumpPair = isTrump(pair[0], gameState.trumpSuit, gameState.trumpLevel);
-      let score = 70 + value;
-
-      if (isTrumpPair) score += 20;
-      if (pair[0].rank === 'A') score += 15;
-      if (pair[0].rank === 'K') score += 10;
-
-      candidates.push({
-        cards: pair,
-        score,
-        reason: isTrumpPair ? '出主牌对子' : '出对子'
-      });
-    }
+  // 2. 副牌A单张
+  const aces = nonTrumps.filter(c => c.rank === 'A');
+  for (const card of aces) {
+    candidates.push({ cards: [card], score: 110, reason: '出副牌A' });
   }
 
-  // 3. 大牌（A、K）
-  const bigCards = hand.filter(c =>
-    !isTrump(c, gameState.trumpSuit, gameState.trumpLevel) &&
-    (c.rank === 'A' || c.rank === 'K')
-  );
-  for (const card of bigCards) {
-    candidates.push({
-      cards: [card],
-      score: 60 + evaluateCardValue(card, gameState.trumpSuit, gameState.trumpLevel),
-      reason: '出大牌控制'
-    });
+  // 3. 副牌K对子
+  const kingPairs = nonTrumpPairs.filter(p => p[0].rank === 'K');
+  for (const pair of kingPairs) {
+    candidates.push({ cards: pair, score: 105, reason: '出副牌K对' });
   }
 
-  // 4. 主牌
-  const trumps = hand.filter(c => isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
-  if (trumps.length > 0) {
-    // 选择小的主牌清主
-    trumps.sort((a, b) => evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
-                        evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel));
-    candidates.push({
-      cards: [trumps[0]],
-      score: 50,
-      reason: '出小主牌清主'
-    });
+  // 4. 副牌K单张
+  const kings = nonTrumps.filter(c => c.rank === 'K');
+  for (const card of kings) {
+    candidates.push({ cards: [card], score: 100, reason: '出副牌K' });
   }
 
-  // 5. 长套牌
+  // 5. 副牌拖拉机
+  const nonTrumpTractors = findTractors(nonTrumps, ts, tl);
+  if (nonTrumpTractors.length > 0) {
+    nonTrumpTractors.sort((a, b) => b.length - a.length);
+    candidates.push({ cards: nonTrumpTractors[0], score: 95, reason: '出副牌拖拉机' });
+  }
+
+  // 6. 其他副牌对子（非A非K）
+  const otherPairs = nonTrumpPairs.filter(p => p[0].rank !== 'A' && p[0].rank !== 'K');
+  otherPairs.sort((a, b) => RANK_ORDER[b[0].rank] - RANK_ORDER[a[0].rank]);
+  for (const pair of otherPairs.slice(0, 2)) {
+    candidates.push({ cards: pair, score: 75, reason: '出副牌对子' });
+  }
+
+  // 7. 长套副牌甩牌
   const suitCounts = {};
-  for (const c of hand) {
-    if (!isTrump(c, gameState.trumpSuit, gameState.trumpLevel)) {
-      suitCounts[c.suit] = (suitCounts[c.suit] || 0) + 1;
-    }
+  for (const c of nonTrumps) {
+    suitCounts[c.suit] = (suitCounts[c.suit] || 0) + 1;
   }
   for (const suit in suitCounts) {
     if (suitCounts[suit] >= 4) {
-      const suitCards = hand.filter(c => c.suit === suit && !isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
-      if (suitCards.length >= 4) {
-        // 检查是否可以甩牌
-        const maxCard = getMaxCard(suitCards, gameState.trumpSuit, gameState.trumpLevel, suit);
-        if (maxCard.rank === 'A' || maxCard.rank === 'K') {
-          candidates.push({
-            cards: suitCards.slice(0, 4),
-            score: 55,
-            reason: '甩长套牌'
-          });
-        }
+      const suitCards = nonTrumps.filter(c => c.suit === suit);
+      const maxCard = getMaxCard(suitCards, ts, tl, suit);
+      if (maxCard.rank === 'A' || maxCard.rank === 'K') {
+        candidates.push({ cards: suitCards.slice(0, 4), score: 80, reason: '甩长套副牌' });
       }
     }
   }
 
-  // 6. 小牌（最后选择）
-  const sortedHand = [...hand].sort((a, b) =>
-    evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
-    evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
+  // 8. 副牌小牌（先出完副牌再清主）
+  const smallNonTrumps = nonTrumps.filter(c => c.rank !== 'A' && c.rank !== 'K');
+  smallNonTrumps.sort((a, b) =>
+    evaluateCardValue(a, ts, tl) - evaluateCardValue(b, ts, tl)
   );
-  candidates.push({
-    cards: [sortedHand[0]],
-    score: 40,
-    reason: '出小牌'
-  });
+  if (smallNonTrumps.length > 0) {
+    candidates.push({ cards: [smallNonTrumps[0]], score: 60, reason: '出小副牌' });
+  }
+
+  // 9. 小主牌清主（排除大王）
+  const smallTrumps = trumps.filter(c => !(c.suit === 'joker' && c.rank === 'big'));
+  if (smallTrumps.length > 0) {
+    smallTrumps.sort((a, b) => evaluateCardValue(a, ts, tl) - evaluateCardValue(b, ts, tl));
+    candidates.push({ cards: [smallTrumps[0]], score: 50, reason: '出小主牌清主' });
+  }
+
+  // 10. 主牌对子/拖拉机（排除包含大王的）
+  const trumpPairs = findPairs(trumps).filter(p => !p.some(c => c.suit === 'joker' && c.rank === 'big'));
+  for (const pair of trumpPairs) {
+    const val = evaluateCardValue(pair[0], ts, tl);
+    candidates.push({ cards: pair, score: 55 + (val >= 90 ? 5 : 0), reason: '出主牌对子' });
+  }
+
+  // 11. 大王 — 最低优先级，保留保底
+  const bigJokers = hand.filter(c => c.suit === 'joker' && c.rank === 'big');
+  if (bigJokers.length > 0) {
+    candidates.push({ cards: [bigJokers[0]], score: 20, reason: '大王保底不出' });
+  }
 
   // 选择最佳候选
   candidates.sort((a, b) => b.score - a.score);
 
-  // 验证每个候选
   for (const candidate of candidates) {
-    const validation = validatePlay(hand, candidate.cards, null, gameState.trumpSuit, gameState.trumpLevel);
+    const validation = validatePlay(hand, candidate.cards, null, ts, tl);
     if (validation.valid) {
       return candidate.cards;
     }
   }
 
+  const sortedHand = [...hand].sort((a, b) =>
+    evaluateCardValue(a, ts, tl) - evaluateCardValue(b, ts, tl)
+  );
   return [sortedHand[0]];
 }
 
@@ -620,6 +805,49 @@ function selectTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
   const candidates = [];
   const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
 
+  // 最后一个出牌且队友确定最大
+  // 优先级：1.贴副分 2.主分将吃 3.贴最小副牌（不浪费主牌）
+  if (analysis.isLastPlayer && analysis.winnerIsTeammate) {
+    // 1. 贴同花色分牌
+    const sameSuitPoints = sameSuitCards.filter(c => POINT_CARDS[c.rank]);
+    if (sameSuitPoints.length > 0) {
+      sameSuitPoints.sort((a, b) =>
+        (POINT_CARDS[b.rank] || 0) - (POINT_CARDS[a.rank] || 0)
+      );
+      candidates.push({ cards: [sameSuitPoints[0]], score: 95, reason: '末家贴副分给队友' });
+    }
+    // 2. 贴非主非同花色分牌（副分）
+    const nonTrumpPoints = otherCards.filter(c => POINT_CARDS[c.rank] && !isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
+    if (nonTrumpPoints.length > 0) {
+      nonTrumpPoints.sort((a, b) =>
+        (POINT_CARDS[b.rank] || 0) - (POINT_CARDS[a.rank] || 0)
+      );
+      candidates.push({ cards: [nonTrumpPoints[0]], score: 90, reason: '末家垫副分给队友' });
+    }
+    // 3. 没有副分时，用主分将吃
+    if (sameSuitCards.length === 0) {
+      const trumpPointCards = otherCards.filter(c => POINT_CARDS[c.rank] && isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
+      if (trumpPointCards.length > 0) {
+        trumpPointCards.sort((a, b) =>
+          (POINT_CARDS[b.rank] || 0) - (POINT_CARDS[a.rank] || 0)
+        );
+        candidates.push({ cards: [trumpPointCards[0]], score: 85, reason: '末家主分将吃' });
+      }
+    }
+    // 4. 贴最小副牌（不浪费主牌）
+    const allNonTrumps = hand.filter(c => !isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
+    if (allNonTrumps.length > 0) {
+      allNonTrumps.sort((a, b) =>
+        evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
+        evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
+      );
+      candidates.push({ cards: [allNonTrumps[0]], score: 70, reason: '末家贴最小副牌' });
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    if (candidates.length > 0) return candidates[0].cards;
+    return [hand[0]];
+  }
+
   // 如果有同花色，跟最小的
   if (sameSuitCards.length > 0) {
     sameSuitCards.sort((a, b) =>
@@ -665,7 +893,7 @@ function selectTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
 
     // 对手贴了分牌时，必须将吃接管，不能让对手得分
     if (trickPoints >= 5) {
-      const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 85, trickPoints);
+      const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 85, trickPoints, analysis.isLastPlayer, analysis);
       candidates.push(...chopCandidates);
     }
 
@@ -832,7 +1060,7 @@ function selectTeammateLosingPlay(hand, leadCards, sameSuitCards, otherCards, ga
   } else {
     // 没有同花色，优先将吃管住对手
     const trickPoints = analysis.trickPoints || 0;
-    const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints);
+    const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints, analysis.isLastPlayer, analysis);
     candidates.push(...chopCandidates);
 
     // 垫牌
@@ -865,6 +1093,49 @@ function selectTeammateLosingPlay(hand, leadCards, sameSuitCards, otherCards, ga
 function selectOpponentLeadingButTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis) {
   const candidates = [];
   const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
+
+  // 最后一个出牌且队友确定最大
+  // 优先级：1.贴副分 2.主分将吃 3.贴最小副牌
+  if (analysis.isLastPlayer && analysis.winnerIsTeammate) {
+    // 1. 贴同花色分牌
+    const sameSuitPoints = sameSuitCards.filter(c => POINT_CARDS[c.rank]);
+    if (sameSuitPoints.length > 0) {
+      sameSuitPoints.sort((a, b) =>
+        (POINT_CARDS[b.rank] || 0) - (POINT_CARDS[a.rank] || 0)
+      );
+      candidates.push({ cards: [sameSuitPoints[0]], score: 95, reason: '末家贴副分' });
+    }
+    // 2. 贴非主非同花色分牌
+    const nonTrumpPoints = otherCards.filter(c => POINT_CARDS[c.rank] && !isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
+    if (nonTrumpPoints.length > 0) {
+      nonTrumpPoints.sort((a, b) =>
+        (POINT_CARDS[b.rank] || 0) - (POINT_CARDS[a.rank] || 0)
+      );
+      candidates.push({ cards: [nonTrumpPoints[0]], score: 90, reason: '末家垫副分' });
+    }
+    // 3. 没有副分时，用主分将吃
+    if (sameSuitCards.length === 0) {
+      const trumpPointCards = otherCards.filter(c => POINT_CARDS[c.rank] && isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
+      if (trumpPointCards.length > 0) {
+        trumpPointCards.sort((a, b) =>
+          (POINT_CARDS[b.rank] || 0) - (POINT_CARDS[a.rank] || 0)
+        );
+        candidates.push({ cards: [trumpPointCards[0]], score: 85, reason: '末家主分将吃' });
+      }
+    }
+    // 4. 贴最小副牌
+    const allNonTrumps = hand.filter(c => !isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
+    if (allNonTrumps.length > 0) {
+      allNonTrumps.sort((a, b) =>
+        evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
+        evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
+      );
+      candidates.push({ cards: [allNonTrumps[0]], score: 70, reason: '末家贴最小副牌' });
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    if (candidates.length > 0) return candidates[0].cards;
+    return [hand[0]];
+  }
 
   if (sameSuitCards.length > 0) {
     // 如果首家出对牌，跟最小的对牌
@@ -900,7 +1171,7 @@ function selectOpponentLeadingButTeammateWinningPlay(hand, leadCards, sameSuitCa
 
     // 对手贴了分牌时，需要将吃确保得分不被对手捡走
     if (trickPoints >= 5) {
-      const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints);
+      const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints, analysis.isLastPlayer, analysis);
       candidates.push(...chopCandidates);
     }
 
@@ -1050,7 +1321,7 @@ function selectOpponentWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
   } else {
     // 没有同花色，优先考虑主牌将吃
     const trickPoints = analysis.trickPoints || 0;
-    const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints);
+    const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints, analysis.isLastPlayer, analysis);
     candidates.push(...chopCandidates);
 
     // 垫牌
@@ -1105,7 +1376,7 @@ function selectDefaultFollowPlay(hand, leadCards, sameSuitCards, otherCards, gam
 
   // 没有同花色，优先将吃
   const trickPoints = analysis.trickPoints || 0;
-  const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 70, trickPoints);
+  const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 70, trickPoints, analysis.isLastPlayer, analysis);
   if (chopCandidates.length > 0) {
     chopCandidates.sort((a, b) => b.score - a.score);
     return chopCandidates[0].cards;

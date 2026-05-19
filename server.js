@@ -317,7 +317,7 @@ function handleOfflinePlay(roomId, game, seat) {
         room.status = 'waiting';
         room.gameId = null;
         room.nextDealer = result.nextDealer;
-        room.nextTrumpLevel = result.nextTrumpLevel;
+        room.levels = result.levels;
         autoStartNextGame(roomId);
       } else {
         broadcast(roomId, { type: 'turn_changed', seat: result.nextSeat, phase: 'playing' });
@@ -766,7 +766,7 @@ function checkAndStartNextGame(roomId) {
       avatar: p.avatar
     })),
     room.nextDealer ?? 0,
-    room.nextTrumpLevel ?? 2,
+    room.levels || { team1: 2, team2: 2 },
     room.nextDealer === undefined
   );
 
@@ -1118,7 +1118,7 @@ async function handleAITurn(roomId, game, seat) {
             room.status = 'waiting';
             room.gameId = null;
             room.nextDealer = result.nextDealer;
-            room.nextTrumpLevel = result.nextTrumpLevel;
+            room.levels = result.levels;
           }
           autoStartNextGame(roomId);
         } else {
@@ -1199,7 +1199,8 @@ const messageHandlers = {
       status: 'waiting',
       players: [null, null, null, null],
       clients: new Set(),
-      gameId: null
+      gameId: null,
+      levels: { team1: 2, team2: 2 }
     };
     rooms.set(roomId, room);
     send(ws, { type: 'room_created', roomId });
@@ -1421,7 +1422,7 @@ const messageHandlers = {
         avatar: p.avatar
       })),
       room.nextDealer ?? 0,
-      room.nextTrumpLevel ?? 2,
+      room.levels || { team1: 2, team2: 2 },
       room.nextDealer === undefined
     );
 
@@ -1639,7 +1640,7 @@ const messageHandlers = {
         room.status = 'waiting';
         room.gameId = null;
         room.nextDealer = result.nextDealer;
-        room.nextTrumpLevel = result.nextTrumpLevel;
+        room.levels = result.levels;
         autoStartNextGame(ws.roomId);
       } else {
         let leadSuit = null;
