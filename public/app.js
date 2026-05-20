@@ -31,6 +31,8 @@ const App = {
     this.bindEvents();
     this.connect();
     this.detectMobile();
+    window.addEventListener('orientationchange', () => this.handleOrientationChange());
+    window.addEventListener('resize', () => this.handleOrientationChange());
   },
 
   isMobile: false,
@@ -52,6 +54,7 @@ const App = {
       screen.orientation.lock('landscape').catch(() => {});
     }
     document.body.classList.add('mobile-game');
+    this.checkOrientation();
   },
 
   exitGameFullscreen() {
@@ -59,8 +62,55 @@ const App = {
       if (document.fullscreenElement || document.webkitFullscreenElement) {
         try { document.exitFullscreen(); } catch (e) {}
       }
+      if (screen.orientation && screen.orientation.unlock) {
+        screen.orientation.unlock().catch(() => {});
+      }
       document.body.classList.remove('mobile-game');
     }
+    this.hideRotateHint();
+  },
+
+  handleOrientationChange() {
+    const gameScreen = document.getElementById('game-screen');
+    if (!gameScreen || !gameScreen.classList.contains('active')) return;
+    // 延迟等待方向变化完成
+    setTimeout(() => this.checkOrientation(), 200);
+  },
+
+  checkOrientation() {
+    const gameScreen = document.getElementById('game-screen');
+    if (!gameScreen || !gameScreen.classList.contains('active')) return;
+    const isPortrait = window.innerHeight > window.innerWidth;
+    if (isPortrait && this.isMobile) {
+      // 竖屏：尝试重新锁定横屏
+      this.requestGameFullscreen();
+      // 如果仍然竖屏且不支持锁定，显示提示
+      setTimeout(() => {
+        if (window.innerHeight > window.innerWidth) {
+          this.showRotateHint();
+        } else {
+          this.hideRotateHint();
+        }
+      }, 500);
+    } else {
+      this.hideRotateHint();
+    }
+  },
+
+  showRotateHint() {
+    let el = document.getElementById('rotate-hint');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'rotate-hint';
+      el.innerHTML = '<div class="rotate-hint-icon">↺</div><p>请旋转手机至横屏</p>';
+      document.body.appendChild(el);
+    }
+    el.style.display = 'flex';
+  },
+
+  hideRotateHint() {
+    const el = document.getElementById('rotate-hint');
+    if (el) el.style.display = 'none';
   },
 
   connect() {
@@ -425,6 +475,12 @@ const App = {
       case 'trump_confirmed':
         this.showToast(`主牌: ${this.SUIT_NAMES[msg.trumpSuit] || '无主'}，打${msg.trumpLevel}`);
         document.getElementById('btn-bid').classList.add('hidden');
+        // 更新主牌信息并重新排序手牌
+        if (this.gameState) {
+          this.gameState.trumpSuit = msg.trumpSuit;
+          this.gameState.trumpLevel = msg.trumpLevel;
+        }
+        this.sortHand();
         break;
 
       case 'bottom_taken':
@@ -833,7 +889,17 @@ const App = {
       const bT = isTrump(b);
       if (aT && !bT) return -1;
       if (!aT && bT) return 1;
-      if (aT && bT) return getTrumpRank(b) - getTrumpRank(a);
+      if (aT && bT) {
+        const rDiff = getTrumpRank(b) - getTrumpRank(a);
+        if (rDiff !== 0) return rDiff;
+        // 主牌同 rank 时，主花色在前，再按花色、点数排
+        const suitOrder = ['spade', 'heart', 'diamond', 'club'];
+        const aSuit = a.suit === 'joker' ? -1 : suitOrder.indexOf(a.suit);
+        const bSuit = b.suit === 'joker' ? -1 : suitOrder.indexOf(b.suit);
+        const sDiff = bSuit - aSuit;
+        if (sDiff !== 0) return sDiff;
+        return this.RANK_ORDER.indexOf(b.rank) - this.RANK_ORDER.indexOf(a.rank);
+      }
 
       const suitOrder = ['spade', 'heart', 'diamond', 'club'];
       const sDiff = suitOrder.indexOf(a.suit) - suitOrder.indexOf(b.suit);
@@ -1267,7 +1333,16 @@ const App = {
       const bT = isTrump(b);
       if (aT && !bT) return -1;
       if (!aT && bT) return 1;
-      if (aT && bT) return getTrumpRank(b) - getTrumpRank(a);
+      if (aT && bT) {
+        const rDiff = getTrumpRank(b) - getTrumpRank(a);
+        if (rDiff !== 0) return rDiff;
+        const suitOrder = ['spade', 'heart', 'diamond', 'club'];
+        const aSuit = a.suit === 'joker' ? -1 : suitOrder.indexOf(a.suit);
+        const bSuit = b.suit === 'joker' ? -1 : suitOrder.indexOf(b.suit);
+        const sDiff = bSuit - aSuit;
+        if (sDiff !== 0) return sDiff;
+        return this.RANK_ORDER.indexOf(b.rank) - this.RANK_ORDER.indexOf(a.rank);
+      }
 
       const suitOrder = ['spade', 'heart', 'diamond', 'club'];
       const sDiff = suitOrder.indexOf(a.suit) - suitOrder.indexOf(b.suit);

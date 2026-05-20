@@ -485,7 +485,12 @@ function isPlayBeating(playCards, winnerCards, leadCards, leadPattern, leadSuit,
     return false;
   }
 
-  // 单张或mix，比最大牌
+  // 甩牌（mix）：跟牌者无法赢过甩牌者，只有将吃才能赢（将吃情况已在前面处理）
+  if (leadPattern.type === 'mix') {
+    return false;
+  }
+
+  // 单张，比最大牌
   const playMax = getMaxCard(playInSuit, trumpSuit, trumpLevel, compareSuit);
   const winnerMax = getMaxCard(winnerInSuit, trumpSuit, trumpLevel, compareSuit);
   return compareCards(playMax, winnerMax, trumpSuit, trumpLevel, compareSuit) > 0;
