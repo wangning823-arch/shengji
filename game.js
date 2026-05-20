@@ -644,11 +644,9 @@ class GameEngine {
         }
         // 反有主为无主：2张王即可
       }
-      if (enteringBidding) {
-        this.status = 'bidding';
-        if (this.isFirstGame) {
-          this.dealer = seat;
-        }
+      if (enteringBidding) this.status = 'bidding';
+      if (this.isFirstGame) {
+        this.dealer = seat;
       }
       this.trumpSuit = null;
       this.bids.push({ seat, suit: null, levelCount: 0, jokers: jokerCards, cards: bidCards });
