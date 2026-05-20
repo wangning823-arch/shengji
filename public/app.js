@@ -44,6 +44,10 @@ const App = {
 
   requestGameFullscreen() {
     if (!this.isMobile) return;
+    // 避免短时间内重复请求
+    if (this._fullscreenRequested) return;
+    this._fullscreenRequested = true;
+    setTimeout(() => { this._fullscreenRequested = false; }, 2000);
     try {
       const el = document.documentElement;
       const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
@@ -54,7 +58,26 @@ const App = {
       screen.orientation.lock('landscape').catch(() => {});
     }
     document.body.classList.add('mobile-game');
-    this.checkOrientation();
+    // 延迟检测方向是否成功
+    setTimeout(() => this.checkOrientation(), 500);
+  },
+
+  setupOneTimeFullscreenTrigger() {
+    if (!this.isMobile) return;
+    const gameScreen = document.getElementById('game-screen');
+    if (!gameScreen) return;
+    // 如果已经在全屏，不需要
+    if (document.fullscreenElement || document.webkitFullscreenElement) return;
+
+    const handler = (e) => {
+      // 排除按钮点击，避免干扰游戏操作
+      if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+      this.requestGameFullscreen();
+      gameScreen.removeEventListener('click', handler);
+      gameScreen.removeEventListener('touchstart', handler);
+    };
+    gameScreen.addEventListener('click', handler);
+    gameScreen.addEventListener('touchstart', handler);
   },
 
   exitGameFullscreen() {
@@ -82,16 +105,7 @@ const App = {
     if (!gameScreen || !gameScreen.classList.contains('active')) return;
     const isPortrait = window.innerHeight > window.innerWidth;
     if (isPortrait && this.isMobile) {
-      // 竖屏：尝试重新锁定横屏
-      this.requestGameFullscreen();
-      // 如果仍然竖屏且不支持锁定，显示提示
-      setTimeout(() => {
-        if (window.innerHeight > window.innerWidth) {
-          this.showRotateHint();
-        } else {
-          this.hideRotateHint();
-        }
-      }, 500);
+      this.showRotateHint();
     } else {
       this.hideRotateHint();
     }
@@ -437,6 +451,7 @@ const App = {
         }
         this.showScreen('game-screen');
         this.requestGameFullscreen();
+        this.setupOneTimeFullscreenTrigger();
         this.updateGameUI();
         break;
 
@@ -642,7 +657,7 @@ const App = {
       this.isReady = false;
     }
 
-    const isHost = state.players.find(p => p !== null)?.userId === this.user?.id;
+    const isHost = state.hostUserId === this.user?.id;
     const btnStart = document.getElementById('btn-start');
     if (isHost && playerCount === 4 && allReady) {
       btnStart.classList.remove('hidden');
@@ -694,8 +709,18 @@ const App = {
       const relSeat = this.getRelativeSeat(p.seat);
       const el = document.querySelector(`.player[data-seat="${relSeat}"]`);
       if (el) {
-        el.querySelector('.player-name').textContent = p.userId === this.user?.id ? '我' : p.nickname;
+        el.querySelector('.player-name').textContent = p.userId === this.user?.id ? '我' : (p.nickname || '--');
         el.querySelector('.player-cards-count').textContent = p.handCount + '张';
+        const avatarEl = el.querySelector('.player-avatar');
+        if (avatarEl) {
+          if (p.avatar) {
+            avatarEl.style.backgroundImage = `url(${p.avatar})`;
+            avatarEl.textContent = '';
+          } else {
+            avatarEl.style.backgroundImage = '';
+            avatarEl.textContent = (p.nickname || '?').charAt(0);
+          }
+        }
         // 显示庄家/对家/闲家标记
         const roleEl = el.querySelector('.player-role');
         if (roleEl) {

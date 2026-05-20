@@ -1085,7 +1085,10 @@ class GameEngine {
         seat: p.seat,
         team: p.team,
         handCount: p.hand.length,
-        hand: seat === p.seat ? p.hand : undefined
+        hand: seat === p.seat ? p.hand : undefined,
+        userId: p.userId,
+        nickname: p.nickname,
+        avatar: p.avatar
       })),
       bids: this.bids,
       tricks: this.tricks

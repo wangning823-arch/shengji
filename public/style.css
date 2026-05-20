@@ -1177,11 +1177,17 @@ body.mobile-game #play-area {
 }
 
 body.mobile-game .trick-seat .card {
-  width: 36px;
-  height: 48px;
+  width: 42px;
+  height: 56px;
   font-size: 10px;
-  padding: 2px 3px;
+  padding: 3px 4px;
   border-radius: 3px;
+}
+
+body.mobile-game .trick-seat .card .suit-top,
+body.mobile-game .trick-seat .card .suit-bottom {
+  font-size: 10px;
+  line-height: 1.2;
 }
 
 body.mobile-game #my-hand {
@@ -1199,15 +1205,21 @@ body.mobile-game #my-hand {
 }
 
 body.mobile-game #my-hand .card {
-  width: 36px;
-  height: 48px;
-  font-size: 9px;
-  padding: 2px 3px;
+  width: 42px;
+  height: 56px;
+  font-size: 10px;
+  padding: 3px 4px;
   border-radius: 3px;
   flex-shrink: 0;
-  margin-left: -10px;
+  margin-left: -12px;
   cursor: pointer;
   transition: transform 0.1s, margin-top 0.1s;
+}
+
+body.mobile-game #my-hand .card .suit-top,
+body.mobile-game #my-hand .card .suit-bottom {
+  font-size: 10px;
+  line-height: 1.2;
 }
 
 body.mobile-game #my-hand .card:first-child {
@@ -1273,10 +1285,10 @@ body.mobile-game .bottom-label {
 }
 
 body.mobile-game .bottom-cards .card {
-  width: 30px;
-  height: 40px;
-  font-size: 8px;
-  padding: 2px;
+  width: 42px;
+  height: 56px;
+  font-size: 10px;
+  padding: 3px 4px;
 }
 
 body.mobile-game .result-card {
@@ -1299,6 +1311,35 @@ body.mobile-game .modal-content {
 
 body.mobile-game .modal-body {
   font-size: 12px;
+}
+
+body.mobile-game .history-play-cards .card,
+body.mobile-game .bottom-cards .card {
+  width: 42px;
+  height: 56px;
+  font-size: 10px;
+  padding: 3px 4px;
+}
+
+body.mobile-game .history-play-cards .card .suit-top,
+body.mobile-game .history-play-cards .card .suit-bottom,
+body.mobile-game .bottom-cards .card .suit-top,
+body.mobile-game .bottom-cards .card .suit-bottom {
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+body.mobile-game .history-trick {
+  padding: 6px;
+}
+
+body.mobile-game .history-play {
+  gap: 4px;
+}
+
+body.mobile-game .history-play-seat {
+  font-size: 10px;
+  min-width: 32px;
 }
 
 /* 竖屏提示 */

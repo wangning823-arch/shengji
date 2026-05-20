@@ -95,7 +95,8 @@ function getRoomState(roomId) {
       isAI: p.isAI || false,
       team: p.seat % 2 === 0 ? 1 : 2
     } : null),
-    gameId: room.gameId
+    gameId: room.gameId,
+    hostUserId: room.hostUserId
   };
 }
 
@@ -1200,7 +1201,8 @@ const messageHandlers = {
       players: [null, null, null, null],
       clients: new Set(),
       gameId: null,
-      levels: { team1: 2, team2: 2 }
+      levels: { team1: 2, team2: 2 },
+      hostUserId: ws.userId
     };
     rooms.set(roomId, room);
     send(ws, { type: 'room_created', roomId });
