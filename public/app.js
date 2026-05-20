@@ -717,12 +717,18 @@ const App = {
         el.querySelector('.player-cards-count').textContent = p.handCount + '张';
         const avatarEl = el.querySelector('.player-avatar');
         if (avatarEl) {
+          let avatarText = avatarEl.querySelector('.avatar-text');
+          if (!avatarText) {
+            avatarText = document.createElement('span');
+            avatarText.className = 'avatar-text';
+            avatarEl.insertBefore(avatarText, avatarEl.firstChild);
+          }
           if (p.avatar) {
             avatarEl.style.backgroundImage = `url(${p.avatar})`;
-            avatarEl.textContent = '';
+            avatarText.textContent = '';
           } else {
             avatarEl.style.backgroundImage = '';
-            avatarEl.textContent = (p.nickname || '?').charAt(0);
+            avatarText.textContent = (p.nickname || '?').charAt(0);
           }
         }
         // 显示庄家/对家/闲家标记
