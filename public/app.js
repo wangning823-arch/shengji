@@ -103,6 +103,9 @@ const App = {
   checkOrientation() {
     const gameScreen = document.getElementById('game-screen');
     if (!gameScreen || !gameScreen.classList.contains('active')) return;
+    // 游戏结束显示结果时，不提示旋转
+    const resultOverlay = document.getElementById('game-result-overlay');
+    if (resultOverlay && !resultOverlay.classList.contains('hidden')) return;
     const isPortrait = window.innerHeight > window.innerWidth;
     if (isPortrait && this.isMobile) {
       this.showRotateHint();
@@ -116,7 +119,11 @@ const App = {
     if (!el) {
       el = document.createElement('div');
       el.id = 'rotate-hint';
-      el.innerHTML = '<div class="rotate-hint-icon">↺</div><p>请旋转手机至横屏</p>';
+      el.innerHTML = '<button id="btn-go-fullscreen" class="btn primary">点击进入横屏全屏</button>';
+      el.querySelector('#btn-go-fullscreen').onclick = () => {
+        this.requestGameFullscreen();
+        this.hideRotateHint();
+      };
       document.body.appendChild(el);
     }
     el.style.display = 'flex';
