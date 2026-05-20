@@ -438,7 +438,7 @@ const App = {
         this.rebidPhase = false;
         this.myHand = msg.hand || [];
         this.localCurrentTrick = [];
-        this.playedHistory = [];
+        this.playedHistory = msg.state?.tricks || [];
         this.bottomCards = [];
         this.gameState = msg.state;
         this.clearTrickArea();
@@ -464,6 +464,10 @@ const App = {
         this.gameState = msg.state;
         if (this.gameState.bottomCards) {
           this.bottomCards = this.gameState.bottomCards;
+        }
+        // 从服务端完整 tricks 恢复已出牌记录（重连时）
+        if (msg.state?.tricks) {
+          this.playedHistory = msg.state.tricks;
         }
         this.updateGameUI();
         break;
