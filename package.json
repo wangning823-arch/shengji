@@ -4,8 +4,11 @@
   "description": "打升级（拖拉机/80分）联机游戏",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node dist/server.js",
+    "dev": "tsx server.ts",
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "uuid": "^9.0.1",
@@ -13,5 +16,12 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/uuid": "^10.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
   }
 }

@@ -1,27 +1,91 @@
-const { v4: uuidv4 } = require('uuid');
+import { v4 as uuidv4 } from 'uuid';
 
-const SUITS = ['spade', 'heart', 'diamond', 'club'];
-const RANKS = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2'];
-const RANK_ORDER = { '3': 0, '4': 1, '5': 2, '6': 3, '7': 4, '8': 5, '9': 6, '10': 7, 'J': 8, 'Q': 9, 'K': 10, 'A': 11, '2': 12 };
-const POINT_CARDS = { '5': 5, '10': 10, 'K': 10 };
+export interface Card {
+  suit: string;
+  rank: string;
+  id: string;
+  deckIndex: number;
+}
 
-function getRankFromLevel(level) {
+export interface Player {
+  seat: number;
+  team: number;
+  hand: Card[];
+  userId?: string;
+  nickname?: string;
+  avatar?: string;
+}
+
+export interface Bid {
+  seat: number;
+  suit: string | null;
+  levelCount: number;
+  jokers: Card[];
+  cards: Card[];
+}
+
+export interface TrickPlay {
+  seat: number;
+  cards: Card[];
+}
+
+export interface Trick {
+  cards: Card[];
+  plays: TrickPlay[];
+  winnerSeat: number;
+  winnerTeam: number;
+  points: number;
+}
+
+export interface Scores {
+  team1: number;
+  team2: number;
+}
+
+export interface Levels {
+  team1: number;
+  team2: number;
+  [key: string]: number;
+}
+
+export interface CardPattern {
+  type: 'single' | 'pair' | 'tractor' | 'mix';
+  length: number;
+}
+
+export interface ValidationResult {
+  valid: boolean;
+  reason?: string;
+  isDump?: boolean;
+}
+
+export interface UpgradeSteps {
+  dealer: number;
+  idle: number;
+}
+
+export const SUITS = ['spade', 'heart', 'diamond', 'club'];
+export const RANKS = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2'];
+export const RANK_ORDER: Record<string, number> = { '3': 0, '4': 1, '5': 2, '6': 3, '7': 4, '8': 5, '9': 6, '10': 7, 'J': 8, 'Q': 9, 'K': 10, 'A': 11, '2': 12 };
+export const POINT_CARDS: Record<string, number> = { '5': 5, '10': 10, 'K': 10 };
+
+export function getRankFromLevel(level: number): string {
   level = ((level - 2) % 13) + 2;
   if (level === 2) return RANKS[12];
   if (level >= 3 && level <= 14) return RANKS[level - 3];
   return String(level);
 }
 
-function normalizeLevel(level) {
+function normalizeLevel(level: number): number {
   return ((level - 2) % 13) + 2;
 }
 
-function createCard(suit, rank, deckIndex) {
+function createCard(suit: string, rank: string, deckIndex: number): Card {
   return { suit, rank, id: `${suit}_${rank}_${deckIndex}`, deckIndex };
 }
 
-function createDeck(deckCount) {
-  const cards = [];
+function createDeck(deckCount: number): Card[] {
+  const cards: Card[] = [];
   for (let d = 0; d < deckCount; d++) {
     for (const suit of SUITS) {
       for (const rank of RANKS) {
@@ -34,7 +98,7 @@ function createDeck(deckCount) {
   return cards;
 }
 
-function shuffle(array) {
+function shuffle<T>(array: T[]): T[] {
   for (let i = array.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [array[i], array[j]] = [array[j], array[i]];
@@ -42,14 +106,14 @@ function shuffle(array) {
   return array;
 }
 
-function getBottomCardCount(deckCount) {
+function getBottomCardCount(deckCount: number): number {
   if (deckCount === 2) return 8;
   if (deckCount === 3) return 6;
   if (deckCount === 4) return 8;
   return 8;
 }
 
-function isTrump(card, trumpSuit, trumpLevel) {
+export function isTrump(card: Card, trumpSuit: string | null, trumpLevel: number): boolean {
   if (card.suit === 'joker') return true;
   if (card.rank === '2') return true;
   if (card.rank === getRankFromLevel(trumpLevel)) return true;
@@ -57,7 +121,7 @@ function isTrump(card, trumpSuit, trumpLevel) {
   return false;
 }
 
-function getTrumpRank(card, trumpSuit, trumpLevel) {
+export function getTrumpRank(card: Card, trumpSuit: string | null, trumpLevel: number): number {
   if (card.suit === 'joker') {
     return card.rank === 'big' ? 100 : 99;
   }
@@ -75,7 +139,7 @@ function getTrumpRank(card, trumpSuit, trumpLevel) {
   return -1;
 }
 
-function compareCards(a, b, trumpSuit, trumpLevel, leadSuit) {
+export function compareCards(a: Card, b: Card, trumpSuit: string | null, trumpLevel: number, leadSuit: string): number {
   const aTrump = isTrump(a, trumpSuit, trumpLevel);
   const bTrump = isTrump(b, trumpSuit, trumpLevel);
 
@@ -95,8 +159,8 @@ function compareCards(a, b, trumpSuit, trumpLevel, leadSuit) {
   return RANK_ORDER[a.rank] - RANK_ORDER[b.rank];
 }
 
-function groupByRank(cards) {
-  const map = {};
+export function groupByRank(cards: Card[]): Record<string, Card[]> {
+  const map: Record<string, Card[]> = {};
   for (const c of cards) {
     const key = `${c.suit}_${c.rank}`;
     if (!map[key]) map[key] = [];
@@ -105,9 +169,9 @@ function groupByRank(cards) {
   return map;
 }
 
-function isTractor(cards, trumpSuit, trumpLevel) {
+export function isTractor(cards: Card[], trumpSuit: string | null, trumpLevel: number): boolean {
   if (cards.length < 4 || cards.length % 2 !== 0) return false;
-  const pairs = [];
+  const pairs: { suit: string; rank: string; count: number }[] = [];
   const grouped = groupByRank(cards);
   for (const key in grouped) {
     if (grouped[key].length >= 2) {
@@ -119,7 +183,7 @@ function isTractor(cards, trumpSuit, trumpLevel) {
 
   pairs.sort((a, b) => RANK_ORDER[a.rank] - RANK_ORDER[b.rank]);
 
-  const isTrumpPair = (p) => isTrump({ suit: p.suit, rank: p.rank }, trumpSuit, trumpLevel);
+  const isTrumpPair = (p: { suit: string; rank: string }) => isTrump({ suit: p.suit, rank: p.rank } as Card, trumpSuit, trumpLevel);
 
   for (let i = 1; i < pairs.length; i++) {
     const prev = pairs[i - 1];
@@ -128,8 +192,8 @@ function isTractor(cards, trumpSuit, trumpLevel) {
     if (!sameSuit) return false;
 
     if (isTrumpPair(prev) && isTrumpPair(curr)) {
-      const trumpRanks = [getTrumpRank({ suit: prev.suit, rank: prev.rank }, trumpSuit, trumpLevel),
-                          getTrumpRank({ suit: curr.suit, rank: curr.rank }, trumpSuit, trumpLevel)];
+      const trumpRanks = [getTrumpRank({ suit: prev.suit, rank: prev.rank } as Card, trumpSuit, trumpLevel),
+                          getTrumpRank({ suit: curr.suit, rank: curr.rank } as Card, trumpSuit, trumpLevel)];
       if (Math.abs(trumpRanks[0] - trumpRanks[1]) !== 1) return false;
     } else {
       if (prev.suit !== curr.suit) return false;
@@ -148,7 +212,7 @@ function isTractor(cards, trumpSuit, trumpLevel) {
   return true;
 }
 
-function getCardPattern(cards, trumpSuit, trumpLevel) {
+export function getCardPattern(cards: Card[], trumpSuit: string | null, trumpLevel: number): CardPattern {
   if (cards.length === 1) return { type: 'single', length: 1 };
 
   const grouped = groupByRank(cards);
@@ -163,8 +227,8 @@ function getCardPattern(cards, trumpSuit, trumpLevel) {
   return { type: 'mix', length: cards.length };
 }
 
-function canBeatSingle(hand, suit, rank, isTrumpCard, trumpSuit, trumpLevel) {
-  const card = { suit, rank };
+function canBeatSingle(hand: Card[], suit: string, rank: string, isTrumpCard: boolean, trumpSuit: string | null, trumpLevel: number): boolean {
+  const card = { suit, rank } as Card;
   const leadSuit = isTrumpCard ? 'trump' : suit;
 
   const sameSuitCards = hand.filter(c => {
@@ -185,8 +249,8 @@ function canBeatSingle(hand, suit, rank, isTrumpCard, trumpSuit, trumpLevel) {
   }
 }
 
-function canBeatPair(hand, suit, rank, isTrumpCard, trumpSuit, trumpLevel) {
-  const card = { suit, rank };
+function canBeatPair(hand: Card[], suit: string, rank: string, isTrumpCard: boolean, trumpSuit: string | null, trumpLevel: number): boolean {
+  const card = { suit, rank } as Card;
   const leadSuit = isTrumpCard ? 'trump' : suit;
 
   const sameSuitCards = hand.filter(c => {
@@ -217,7 +281,7 @@ function canBeatPair(hand, suit, rank, isTrumpCard, trumpSuit, trumpLevel) {
   }
 }
 
-function isDumpGuaranteedMax(dumpCards, otherPlayers, trumpSuit, trumpLevel) {
+function isDumpGuaranteedMax(dumpCards: Card[], otherPlayers: Player[], trumpSuit: string | null, trumpLevel: number): boolean {
   const grouped = groupByRank(dumpCards);
 
   for (const key in grouped) {
@@ -242,9 +306,9 @@ function isDumpGuaranteedMax(dumpCards, otherPlayers, trumpSuit, trumpLevel) {
   return true;
 }
 
-function getFallbackFromDump(dumpCards, trumpSuit, trumpLevel) {
+function getFallbackFromDump(dumpCards: Card[], trumpSuit: string | null, trumpLevel: number): { type: string; cards: Card[] } {
   const grouped = groupByRank(dumpCards);
-  const components = [];
+  const components: { type: string; cards: Card[] }[] = [];
 
   for (const key in grouped) {
     const cards = grouped[key];
@@ -270,14 +334,14 @@ function getFallbackFromDump(dumpCards, trumpSuit, trumpLevel) {
   return components[0];
 }
 
-function hasSuit(hand, suit, trumpSuit, trumpLevel) {
+function hasSuit(hand: Card[], suit: string, trumpSuit: string | null, trumpLevel: number): boolean {
   return hand.some(c => {
     if (suit === 'trump') return isTrump(c, trumpSuit, trumpLevel);
     return !isTrump(c, trumpSuit, trumpLevel) && c.suit === suit;
   });
 }
 
-function canFollow(hand, leadCards, trumpSuit, trumpLevel) {
+function canFollow(hand: Card[], leadCards: Card[], trumpSuit: string | null, trumpLevel: number): boolean {
   if (!leadCards || leadCards.length === 0) return true;
 
   const leadFirst = leadCards[0];
@@ -314,7 +378,7 @@ function canFollow(hand, leadCards, trumpSuit, trumpLevel) {
   return true;
 }
 
-function validatePlay(hand, playedCards, leadCards, trumpSuit, trumpLevel) {
+export function validatePlay(hand: Card[], playedCards: Card[], leadCards: Card[] | null, trumpSuit: string | null, trumpLevel: number): ValidationResult {
   if (!hand.every(c => playedCards.some(pc => pc.id === c.id) || !playedCards.some(pc => pc.id === c.id))) {
     return { valid: false, reason: '包含非手牌' };
   }
@@ -382,7 +446,7 @@ function validatePlay(hand, playedCards, leadCards, trumpSuit, trumpLevel) {
   return { valid: true };
 }
 
-function findWinningCard(trickPlays, trumpSuit, trumpLevel, leadSuit) {
+export function findWinningCard(trickPlays: TrickPlay[], trumpSuit: string | null, trumpLevel: number, leadSuit: string): number {
   const leadCards = trickPlays[0].cards;
   const leadPattern = getCardPattern(leadCards, trumpSuit, trumpLevel);
 
@@ -396,7 +460,7 @@ function findWinningCard(trickPlays, trumpSuit, trumpLevel, leadSuit) {
   return winner;
 }
 
-function isPlayBeating(playCards, winnerCards, leadCards, leadPattern, leadSuit, trumpSuit, trumpLevel) {
+export function isPlayBeating(playCards: Card[], winnerCards: Card[], leadCards: Card[], leadPattern: CardPattern, leadSuit: string, trumpSuit: string | null, trumpLevel: number): boolean {
   const leadIsTrump = isTrump(leadCards[0], trumpSuit, trumpLevel);
 
   // 判断各方出了什么类型的牌
@@ -496,12 +560,12 @@ function isPlayBeating(playCards, winnerCards, leadCards, leadPattern, leadSuit,
   return compareCards(playMax, winnerMax, trumpSuit, trumpLevel, compareSuit) > 0;
 }
 
-function getMaxCard(cards, trumpSuit, trumpLevel, leadSuit) {
-  if (!cards || cards.length === 0) return { suit: 'joker', rank: 'small' };
+export function getMaxCard(cards: Card[], trumpSuit: string | null, trumpLevel: number, leadSuit: string): Card {
+  if (!cards || cards.length === 0) return { suit: 'joker', rank: 'small', id: 'joker_small_-1', deckIndex: -1 };
   return cards.reduce((max, c) => compareCards(c, max, trumpSuit, trumpLevel, leadSuit) > 0 ? c : max);
 }
 
-function getRoundPoints(cards) {
+export function getRoundPoints(cards: Card[]): number {
   let points = 0;
   for (const c of cards) {
     if (POINT_CARDS[c.rank]) points += POINT_CARDS[c.rank];
@@ -509,7 +573,7 @@ function getRoundPoints(cards) {
   return points;
 }
 
-function getUpgradeSteps(score, totalScore, deckCount) {
+export function getUpgradeSteps(score: number, totalScore: number, deckCount: number): UpgradeSteps {
   const step = deckCount * 20;
   if (score === 0) return { dealer: 3, idle: 0 };
   if (score < step) return { dealer: 2, idle: 0 };
@@ -519,12 +583,37 @@ function getUpgradeSteps(score, totalScore, deckCount) {
   return { dealer: 0, idle: idleSteps };
 }
 
-class GameEngine {
-  constructor(roomId, deckCount = 2, players = [], dealer = 0, levels = null, isFirstGame = true) {
+export class GameEngine {
+  id: string;
+  roomId: string;
+  deckCount: number;
+  players: Player[];
+  dealer: number;
+  isFirstGame: boolean;
+  trumpSuit: string | null;
+  status: string;
+  bottomCards: Card[];
+  currentTrick: TrickPlay[];
+  leadSeat: number;
+  currentSeat: number;
+  tricks: Trick[];
+  scores: Scores;
+  levels: Levels;
+  trumpLevel: number;
+  bids: Bid[];
+  totalScore: number;
+  bidRoundStartSeat: number;
+  _deck: Card[];
+  _bottomCount: number;
+  _handSize: number;
+  _dealRound: number;
+  _rebidPhase: boolean;
+
+  constructor(roomId: string, deckCount: number = 2, players: Partial<Player>[] = [], dealer: number = 0, levels: Levels | null = null, isFirstGame: boolean = true) {
     this.id = uuidv4();
     this.roomId = roomId;
     this.deckCount = deckCount;
-    this.players = players.map((p, i) => ({ ...p, seat: i, hand: [], team: i % 2 === 0 ? 1 : 2 }));
+    this.players = players.map((p, i) => ({ ...p, seat: i, hand: [], team: i % 2 === 0 ? 1 : 2 } as Player));
     this.dealer = dealer;
     this.isFirstGame = isFirstGame;
     this.trumpSuit = null;
@@ -546,9 +635,10 @@ class GameEngine {
     this._bottomCount = 0;
     this._handSize = 0;
     this._dealRound = 0;
+    this._rebidPhase = false;
   }
 
-  startDeal() {
+  startDeal(): { done: boolean; round?: number; hands: number[]; bottom?: number } {
     this._deck = shuffle(createDeck(this.deckCount));
     this._bottomCount = getBottomCardCount(this.deckCount);
     this._handSize = (this._deck.length - this._bottomCount) / 4;
@@ -568,7 +658,7 @@ class GameEngine {
     return this.dealNextRound();
   }
 
-  dealNextRound() {
+  dealNextRound(): { done: boolean; round?: number; hands: number[]; bottom?: number } {
     if (this._dealRound >= this._handSize) {
       // 发完所有手牌
       this.bottomCards = this._deck.slice(-this._bottomCount);
@@ -597,12 +687,12 @@ class GameEngine {
     return { done: false, round: this._dealRound, hands: this.players.map(p => p.hand.length) };
   }
 
-  bid(seat, cards) {
+  bid(seat: number, cards: Card[]): { success: boolean; reason?: string; trumpSuit?: string | null } {
     if (this.status !== 'dealing' && this.status !== 'bidding') return { success: false, reason: '不在亮主阶段' };
     if (seat !== this.currentSeat) return { success: false, reason: '不是当前玩家的回合' };
 
     const player = this.players[seat];
-    const bidCards = cards.map(c => player.hand.find(h => h.id === c.id)).filter(Boolean);
+    const bidCards = cards.map(c => player.hand.find(h => h.id === c.id)).filter(Boolean) as Card[];
     if (bidCards.length === 0) return { success: false, reason: '无效的牌' };
 
     const trumpLevelStr = getRankFromLevel(this.trumpLevel);
@@ -628,7 +718,7 @@ class GameEngine {
     }
 
     // 王比较：数量优先，同数量比大王数量
-    const compareJokers = (a, b) => {
+    const compareJokers = (a: Card[], b: Card[]): number => {
       if (a.length !== b.length) return a.length - b.length;
       return a.filter(j => j.rank === 'big').length - b.filter(j => j.rank === 'big').length;
     };
@@ -714,7 +804,7 @@ class GameEngine {
     return { success: true, trumpSuit: levelCards[0].suit };
   }
 
-  passBid(seat) {
+  passBid(seat: number): { success: boolean; reason?: string; action?: string } {
     if (this.status !== 'dealing' && this.status !== 'bidding') return { success: false, reason: '不在亮主阶段' };
     if (seat !== this.currentSeat) return { success: false, reason: '不是当前玩家的回合' };
     this.currentSeat = (this.currentSeat + 1) % 4;
@@ -750,7 +840,7 @@ class GameEngine {
     return { success: true };
   }
 
-  canBid(seat) {
+  canBid(seat: number): boolean {
     if (this.status !== 'dealing' && this.status !== 'bidding') return false;
 
     const player = this.players[seat];
@@ -773,7 +863,7 @@ class GameEngine {
     // 无主情况：需要2张王
     if (levelCards.length === 0 && jokerCards.length >= 2) {
       if (existingBid.suit === null) {
-        const compareJokers = (a, b) => {
+        const compareJokers = (a: Card[], b: Card[]): number => {
           if (a.length !== b.length) return a.length - b.length;
           return a.filter(j => j.rank === 'big').length - b.filter(j => j.rank === 'big').length;
         };
@@ -786,7 +876,7 @@ class GameEngine {
     if (existingBid.suit === null) {
       if (levelCards.length > 0) return false;
       if (jokerCards.length < 2) return false;
-      const compareJokers = (a, b) => {
+      const compareJokers = (a: Card[], b: Card[]): number => {
         if (a.length !== b.length) return a.length - b.length;
         return a.filter(j => j.rank === 'big').length - b.filter(j => j.rank === 'big').length;
       };
@@ -796,7 +886,7 @@ class GameEngine {
     // 反有主：需要比当前多1张同花色级牌 + 1张王
     if (jokerCards.length === 0) return false;
     const existingLevelCount = existingBid.levelCount || 0;
-    const levelCardsBySuit = {};
+    const levelCardsBySuit: Record<string, number> = {};
     for (const c of levelCards) {
       if (!levelCardsBySuit[c.suit]) levelCardsBySuit[c.suit] = 0;
       levelCardsBySuit[c.suit]++;
@@ -805,7 +895,7 @@ class GameEngine {
     return maxSameSuitLevelCount >= existingLevelCount + 1;
   }
 
-  canRebid(seat) {
+  canRebid(seat: number): boolean {
     if (this.status !== 'dealing' && this.status !== 'bidding') return false;
     if (this.bids.length === 0) return false;
 
@@ -826,7 +916,7 @@ class GameEngine {
     if (existingBid.suit === null) {
       if (levelCards.length > 0) return false;
       if (jokerCards.length < 2) return false;
-      const compareJokers = (a, b) => {
+      const compareJokers = (a: Card[], b: Card[]): number => {
         if (a.length !== b.length) return a.length - b.length;
         return a.filter(j => j.rank === 'big').length - b.filter(j => j.rank === 'big').length;
       };
@@ -841,7 +931,7 @@ class GameEngine {
     // 反有主：需要比当前多1张同花色级牌 + 1张王
     if (jokerCards.length === 0) return false;
     const existingLevelCount = existingBid.levelCount || 0;
-    const levelCardsBySuit = {};
+    const levelCardsBySuit: Record<string, number> = {};
     for (const c of levelCards) {
       if (!levelCardsBySuit[c.suit]) levelCardsBySuit[c.suit] = 0;
       levelCardsBySuit[c.suit]++;
@@ -850,7 +940,7 @@ class GameEngine {
     return maxSameSuitLevelCount >= existingLevelCount + 1;
   }
 
-  confirmTrump() {
+  confirmTrump(): { trumpSuit: string | null; bottomCount: number } {
     // 发完剩余手牌
     while (this._deck.length > 0 && this._dealRound < this._handSize) {
       const result = this.dealNextRound();
@@ -876,12 +966,12 @@ class GameEngine {
     return { trumpSuit: this.trumpSuit, bottomCount: this.bottomCards.length };
   }
 
-  setBottom(seat, cardIds) {
+  setBottom(seat: number, cardIds: string[]): { success: boolean; reason?: string } {
     if (this.status !== 'taking_bottom') return { success: false, reason: '不在扣底阶段' };
     if (seat !== this.dealer) return { success: false, reason: '只有庄家可以扣底' };
 
     const dealer = this.players[seat];
-    const cards = cardIds.map(id => dealer.hand.find(c => c.id === id)).filter(Boolean);
+    const cards = cardIds.map(id => dealer.hand.find(c => c.id === id)).filter(Boolean) as Card[];
     if (cards.length !== this.bottomCards.length) {
       return { success: false, reason: `需要扣回${this.bottomCards.length}张底牌` };
     }
@@ -897,12 +987,12 @@ class GameEngine {
     return { success: true };
   }
 
-  play(seat, cardIds) {
+  play(seat: number, cardIds: string[]): { success: boolean; reason?: string; trickEnded?: boolean; winnerSeat?: number; winnerTeam?: number; points?: number; scores?: Scores; nextSeat?: number; playedCards?: Card[]; gameEnded?: boolean; idleScore?: number; dealerTeam?: number; winner?: string; levels?: Levels; nextDealer?: number; nextTrumpLevel?: number; bottomPoints?: number; bottomMultiplier?: number; steps?: UpgradeSteps; step?: number } {
     if (this.status !== 'playing') return { success: false, reason: '不在出牌阶段' };
     if (seat !== this.currentSeat) return { success: false, reason: '还没轮到你' };
 
     const player = this.players[seat];
-    let cards = cardIds.map(id => player.hand.find(c => c.id === id)).filter(Boolean);
+    let cards = cardIds.map(id => player.hand.find(c => c.id === id)).filter(Boolean) as Card[];
     if (cards.length === 0) return { success: false, reason: '无效的牌' };
 
     const leadCards = this.currentTrick.length > 0 ? this.currentTrick[0].cards : null;
@@ -981,7 +1071,7 @@ class GameEngine {
     return { success: true, nextSeat: this.currentSeat, playedCards: cards };
   }
 
-  endRound() {
+  endRound(): { success: boolean; gameEnded: true; idleScore: number; dealerTeam: number; winner: string; scores: Scores; levels: Levels; nextDealer: number; nextTrumpLevel: number; bottomPoints: number; bottomMultiplier: number; steps: UpgradeSteps; step: number } {
     this.status = 'finished';
     const dealerTeam = this.players[this.dealer].team;
     const idleTeam = dealerTeam === 1 ? 2 : 1;
@@ -1022,7 +1112,7 @@ class GameEngine {
     const step = this.deckCount * 20;
 
     // Determine winner: 'dealer', 'idle', or 'draw'
-    let winner;
+    let winner: string;
     if (steps.idle > 0) winner = 'idle';
     else if (steps.dealer > 0) winner = 'dealer';
     else if (idleScore >= step * 2) winner = 'idle';
@@ -1034,13 +1124,13 @@ class GameEngine {
     if (idleLevelChange > 0) {
       // 闲家得分>=120，升级并夺庄
       this.levels[`team${idleTeam}`] = normalizeLevel(this.levels[`team${idleTeam}`] + idleLevelChange);
-      this.dealer = this.players.find(p => p.team === idleTeam).seat;
+      this.dealer = this.players.find(p => p.team === idleTeam)!.seat;
     } else if (dealerLevelChange > 0) {
       // 庄家守住，升级
       this.levels[`team${dealerTeam}`] = normalizeLevel(this.levels[`team${dealerTeam}`] + dealerLevelChange);
     } else if (idleScore >= step * 2) {
       // 闲家得分80-119，夺庄但不额外升级
-      this.dealer = this.players.find(p => p.team === idleTeam).seat;
+      this.dealer = this.players.find(p => p.team === idleTeam)!.seat;
     }
     // else: 庄家守住但不升级（40-79分），庄家不变
 
@@ -1063,7 +1153,7 @@ class GameEngine {
     };
   }
 
-  toJSON(seat = -1) {
+  toJSON(seat: number = -1): Record<string, any> {
     return {
       id: this.id,
       status: this.status,
@@ -1093,24 +1183,3 @@ class GameEngine {
     };
   }
 }
-
-module.exports = {
-  GameEngine,
-  SUITS,
-  RANKS,
-  RANK_ORDER,
-  POINT_CARDS,
-  getRankFromLevel,
-  isTrump,
-  compareCards,
-  getCardPattern,
-  validatePlay,
-  findWinningCard,
-  isPlayBeating,
-  getMaxCard,
-  isTractor,
-  groupByRank,
-  getTrumpRank,
-  getRoundPoints,
-  getUpgradeSteps
-};

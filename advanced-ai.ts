@@ -3,22 +3,69 @@
  * 基于专业的拖拉机打牌技巧设计
  */
 
-const {
+import {
+  Card, Player, Trick, Scores, Levels, CardPattern, ValidationResult,
   validatePlay, getCardPattern, isTrump, compareCards,
   isPlayBeating, findWinningCard, getMaxCard, isTractor,
   groupByRank, getTrumpRank, RANK_ORDER, POINT_CARDS, getRoundPoints,
-  getRankFromLevel
-} = require('./game');
+  getRankFromLevel, TrickPlay
+} from './game';
 
-const SUIT_NAMES = { spade: '黑桃', heart: '红桃', diamond: '方块', club: '梅花', joker: '王牌' };
-const SUIT_ORDER = { spade: 3, heart: 2, diamond: 1, club: 0 };
+interface Candidate {
+  cards: Card[];
+  score: number;
+  reason: string;
+}
+
+interface Analysis {
+  myTeam: number;
+  myStrength: number;
+  myTrumps: number;
+  myPairs: number;
+  myTractors: number;
+  tricksPlayed: number;
+  tricksRemaining: number;
+  myTeamScore: number;
+  oppTeamScore: number;
+  isDealer: boolean;
+  dealerTeam: number;
+  bottomPoints: number;
+  trumpSuit: string | null;
+  trumpLevel: number;
+  bottomCardPoints: number;
+  bottomProtection: number;
+  currentTrick: TrickPlay[];
+  leadIsTeammate?: boolean;
+  isLastPlayer?: boolean;
+  currentChopper?: number | null;
+  currentChopperTeam?: number;
+  currentChopperTrumps?: Card[];
+  winnerIsTeammate?: boolean;
+  winnerIsMe?: boolean;
+  currentWinnerCards?: Card[];
+  trickPoints: number;
+  trickPointCards: { seat: number; team: number; card: Card; points: number }[];
+  opponentTrickPoints: number;
+}
+
+interface CardTracker {
+  setTrump(trumpSuit: string | null, trumpLevel: number): void;
+  recordTrick(trick: Trick): void;
+  isPlayerVoidInSuit(seat: number, suit: string): boolean;
+  getRemainingPoints(): number;
+  totalPoints: number;
+  playedBySuit?: Record<string, Card[]>;
+}
+
+const SUIT_NAMES: Record<string, string> = { spade: '黑桃', heart: '红桃', diamond: '方块', club: '梅花', joker: '王牌' };
+const SUIT_ORDER: Record<string, number> = { spade: 3, heart: 2, diamond: 1, club: 0 };
 
 // ==================== 牌力评估系统 ====================
 
 /**
  * 评估单张牌的价值
  */
-function evaluateCardValue(card, trumpSuit, trumpLevel) {
+export function evaluateCardValue(card: Card, trumpSuit: string | null, trumpLevel: number): number {
   if (card.suit === 'joker') {
     return card.rank === 'big' ? 100 : 99;
   }
@@ -44,7 +91,7 @@ function evaluateCardValue(card, trumpSuit, trumpLevel) {
 /**
  * 评估一组牌的价值
  */
-function evaluateCardsValue(cards, trumpSuit, trumpLevel) {
+export function evaluateCardsValue(cards: Card[], trumpSuit: string | null, trumpLevel: number): number {
   if (!cards || cards.length === 0) return 0;
   return cards.reduce((sum, c) => sum + evaluateCardValue(c, trumpSuit, trumpLevel), 0);
 }
@@ -52,7 +99,7 @@ function evaluateCardsValue(cards, trumpSuit, trumpLevel) {
 /**
  * 评估手牌整体强度
  */
-function evaluateHandStrength(hand, trumpSuit, trumpLevel) {
+export function evaluateHandStrength(hand: Card[], trumpSuit: string | null, trumpLevel: number): number {
   let strength = 0;
 
   // 主牌数量
@@ -87,8 +134,8 @@ function evaluateHandStrength(hand, trumpSuit, trumpLevel) {
 /**
  * 找出手牌中的所有对子
  */
-function findPairs(hand, trumpSuit, trumpLevel) {
-  const pairs = [];
+export function findPairs(hand: Card[], trumpSuit?: string | null, trumpLevel?: number): Card[][] {
+  const pairs: Card[][] = [];
   const grouped = groupByRank(hand);
 
   for (const key in grouped) {
@@ -103,8 +150,8 @@ function findPairs(hand, trumpSuit, trumpLevel) {
 /**
  * 找出手牌中的所有拖拉机
  */
-function findTractors(hand, trumpSuit, trumpLevel) {
-  const tractors = [];
+export function findTractors(hand: Card[], trumpSuit: string | null, trumpLevel: number): Card[][] {
+  const tractors: Card[][] = [];
   const pairs = findPairs(hand, trumpSuit, trumpLevel);
 
   if (pairs.length < 2) return tractors;
@@ -115,7 +162,7 @@ function findTractors(hand, trumpSuit, trumpLevel) {
   // 尝试所有连续对子组合
   for (let len = pairs.length; len >= 2; len--) {
     for (let start = 0; start <= pairs.length - len; start++) {
-      const candidate = [];
+      const candidate: Card[] = [];
       for (let i = start; i < start + len; i++) {
         candidate.push(pairs[i][0], pairs[i][1]);
       }
@@ -133,15 +180,15 @@ function findTractors(hand, trumpSuit, trumpLevel) {
 /**
  * 分析当前局势
  */
-function analyzeGameState(hand, gameState, seat, team, cardTracker) {
-  const analysis = {
+export function analyzeGameState(hand: Card[], gameState: any, seat: number, team: number, cardTracker?: CardTracker): Analysis {
+  const analysis: Analysis = {
     myTeam: team,
     myStrength: evaluateHandStrength(hand, gameState.trumpSuit, gameState.trumpLevel),
     myTrumps: hand.filter(c => isTrump(c, gameState.trumpSuit, gameState.trumpLevel)).length,
     myPairs: findPairs(hand, gameState.trumpSuit, gameState.trumpLevel).length,
     myTractors: findTractors(hand, gameState.trumpSuit, gameState.trumpLevel).length,
     tricksPlayed: gameState.tricksCount || 0,
-    tricksRemaining: Math.min(...gameState.players.map(p => p.handCount || 0)),
+    tricksRemaining: Math.min(...gameState.players.map((p: any) => p.handCount || 0)),
     myTeamScore: team === 1 ? (gameState.scores?.team1 || 0) : (gameState.scores?.team2 || 0),
     oppTeamScore: team === 1 ? (gameState.scores?.team2 || 0) : (gameState.scores?.team1 || 0),
     isDealer: gameState.dealer === seat,
@@ -151,7 +198,11 @@ function analyzeGameState(hand, gameState, seat, team, cardTracker) {
     trumpLevel: gameState.trumpLevel,
     // 保底相关
     bottomCardPoints: 0,
-    bottomProtection: 0  // 0=无需保护, 1=中等保护, 2=强保护
+    bottomProtection: 0,  // 0=无需保护, 1=中等保护, 2=强保护
+    currentTrick: [],
+    trickPoints: 0,
+    trickPointCards: [],
+    opponentTrickPoints: 0
   };
 
   // 计算保底保护等级
@@ -162,7 +213,7 @@ function analyzeGameState(hand, gameState, seat, team, cardTracker) {
   if (isMyTeamDealer) {
     // 庄家方：可见底牌，计算实际分值
     if (gameState.bottomCards) {
-      analysis.bottomCardPoints = gameState.bottomCards.reduce((sum, c) => sum + (POINT_CARDS[c.rank] || 0), 0);
+      analysis.bottomCardPoints = gameState.bottomCards.reduce((sum: number, c: Card) => sum + (POINT_CARDS[c.rank] || 0), 0);
     }
     const bp = analysis.bottomCardPoints;
     if (isEndgame && bp >= 30) analysis.bottomProtection = 2;
@@ -199,16 +250,16 @@ function analyzeGameState(hand, gameState, seat, team, cardTracker) {
     analysis.currentChopper = null; // 将吃者的seat
     for (let i = 1; i < currentTrick.length; i++) {
       const play = currentTrick[i];
-      const hasSameSuit = play.cards.some(c => {
+      const hasSameSuit = play.cards.some((c: Card) => {
         if (leadIsTrump0) return isTrump(c, gameState.trumpSuit, gameState.trumpLevel);
         return !isTrump(c, gameState.trumpSuit, gameState.trumpLevel) && c.suit === leadSuit0;
       });
-      const hasTrump = play.cards.some(c => isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
+      const hasTrump = play.cards.some((c: Card) => isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
       if (!hasSameSuit && hasTrump) {
         analysis.currentChopper = play.seat;
         analysis.currentChopperTeam = gameState.players[play.seat]?.team;
         // 记录将吃者出的主牌（用于比较大小）
-        analysis.currentChopperTrumps = play.cards.filter(c => isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
+        analysis.currentChopperTrumps = play.cards.filter((c: Card) => isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
         break;
       }
     }
@@ -224,7 +275,7 @@ function analyzeGameState(hand, gameState, seat, team, cardTracker) {
 
     // 计算场上分牌统计
     let trickPoints = 0;
-    const trickPointCards = [];
+    const trickPointCards: { seat: number; team: number; card: Card; points: number }[] = [];
     for (const play of currentTrick) {
       for (const card of play.cards) {
         const pts = POINT_CARDS[card.rank] || 0;
@@ -254,17 +305,9 @@ function analyzeGameState(hand, gameState, seat, team, cardTracker) {
 
 /**
  * 生成将吃候选牌
- * @param {Array} otherCards - 非首家花色的手牌
- * @param {Array} leadCards - 首家出的牌
- * @param {Object} gameState - 游戏状态
- * @param {number} baseScore - 将吃基础评分
- * @param {number} trickPoints - 场上分牌总价值
- * @param {boolean} isLastPlayer - 是否最后一个出牌
- * @param {Object} analysis - 局势分析（含currentChopper等信息）
- * @returns {Array} 将吃候选列表
  */
-function generateChopCandidates(otherCards, leadCards, gameState, baseScore, trickPoints, isLastPlayer, analysis) {
-  const candidates = [];
+export function generateChopCandidates(otherCards: Card[], leadCards: Card[], gameState: any, baseScore: number, trickPoints: number, isLastPlayer: boolean, analysis: Analysis): Candidate[] {
+  const candidates: Candidate[] = [];
   const trumpSuit = gameState.trumpSuit;
   const trumpLevel = gameState.trumpLevel;
 
@@ -294,7 +337,7 @@ function generateChopCandidates(otherCards, leadCards, gameState, baseScore, tri
     // 对手将吃了 → 尝试出更大的主牌将吃
     const biggerChopCandidates = _generateChopCandidatesBiggerThan(
       trumpCards, leadCards, leadPattern, chopScore + 20,
-      trumpSuit, trumpLevel, analysis.currentChopperTrumps
+      trumpSuit, trumpLevel, analysis.currentChopperTrumps!
     );
     if (biggerChopCandidates.length > 0) {
       candidates.push(...biggerChopCandidates);
@@ -341,12 +384,12 @@ function generateChopCandidates(otherCards, leadCards, gameState, baseScore, tri
 /**
  * 非末家将吃：有分牌时出最大主牌保护分数，无分牌时出最小主牌节省实力
  */
-function _generateChopCandidatesMax(trumpCards, leadCards, leadPattern, chopScore, trumpSuit, trumpLevel, candidates, trickPoints) {
+function _generateChopCandidatesMax(trumpCards: Card[], leadCards: Card[], leadPattern: CardPattern, chopScore: number, trumpSuit: string | null, trumpLevel: number, candidates: Candidate[], trickPoints: number): Candidate[] {
   const hasPoints = (trickPoints || 0) > 0;
   // 有分牌时出最大（保护分数），无分牌时出最小（节省实力）
   const sortOrder = hasPoints
-    ? (a, b) => evaluateCardValue(b, trumpSuit, trumpLevel) - evaluateCardValue(a, trumpSuit, trumpLevel)
-    : (a, b) => evaluateCardValue(a, trumpSuit, trumpLevel) - evaluateCardValue(b, trumpSuit, trumpLevel);
+    ? (a: Card, b: Card) => evaluateCardValue(b, trumpSuit, trumpLevel) - evaluateCardValue(a, trumpSuit, trumpLevel)
+    : (a: Card, b: Card) => evaluateCardValue(a, trumpSuit, trumpLevel) - evaluateCardValue(b, trumpSuit, trumpLevel);
   const label = hasPoints ? '(大牌)' : '(小牌)';
   trumpCards.sort(sortOrder);
 
@@ -388,7 +431,7 @@ function _generateChopCandidatesMax(trumpCards, leadCards, leadPattern, chopScor
 /**
  * 末家将吃（无人将吃）：优先主分牌，否则最小主牌
  */
-function _generateChopCandidatesLastPlayer(trumpCards, leadCards, leadPattern, chopScore, trumpSuit, trumpLevel, candidates) {
+function _generateChopCandidatesLastPlayer(trumpCards: Card[], leadCards: Card[], leadPattern: CardPattern, chopScore: number, trumpSuit: string | null, trumpLevel: number, candidates: Candidate[]): Candidate[] {
   if (leadPattern.type === 'single') {
     // 优先出主分牌将吃
     const trumpPointCards = trumpCards.filter(c => POINT_CARDS[c.rank]);
@@ -439,7 +482,7 @@ function _generateChopCandidatesLastPlayer(trumpCards, leadCards, leadPattern, c
   } else {
     // mix类型 → 优先出主分牌
     const trumpPointCards = trumpCards.filter(c => POINT_CARDS[c.rank]);
-    const playCards = [];
+    const playCards: Card[] = [];
     if (trumpPointCards.length > 0) {
       trumpPointCards.sort((a, b) =>
         (POINT_CARDS[b.rank] || 0) - (POINT_CARDS[a.rank] || 0)
@@ -464,8 +507,8 @@ function _generateChopCandidatesLastPlayer(trumpCards, leadCards, leadPattern, c
 /**
  * 生成比上家将吃更大的将吃候选
  */
-function _generateChopCandidatesBiggerThan(trumpCards, leadCards, leadPattern, chopScore, trumpSuit, trumpLevel, chopperTrumps) {
-  const candidates = [];
+function _generateChopCandidatesBiggerThan(trumpCards: Card[], leadCards: Card[], leadPattern: CardPattern, chopScore: number, trumpSuit: string | null, trumpLevel: number, chopperTrumps: Card[]): Candidate[] {
+  const candidates: Candidate[] = [];
 
   if (leadPattern.type === 'single') {
     // 找比将吃者最大主牌更大的单主
@@ -517,9 +560,9 @@ function _generateChopCandidatesBiggerThan(trumpCards, leadCards, leadPattern, c
  * 首家出牌策略
  * 核心原则：先出有把握的副牌大牌，再清主，大王保留保底
  */
-function selectLeadPlay(hand, gameState, seat, team, cardTracker) {
+export function selectLeadPlay(hand: Card[], gameState: any, seat: number, team: number, cardTracker?: CardTracker): Card[] {
   const analysis = analyzeGameState(hand, gameState, seat, team, cardTracker);
-  const candidates = [];
+  const candidates: Candidate[] = [];
   const ts = gameState.trumpSuit;
   const tl = gameState.trumpLevel;
   const handCount = hand.length;
@@ -533,7 +576,7 @@ function selectLeadPlay(hand, gameState, seat, team, cardTracker) {
 
   // 检测对手缺门信息
   const opponents = [0, 1, 2, 3].filter(s => gameState.players[s]?.team !== team);
-  const suitVoidInfo = {};
+  const suitVoidInfo: Record<string, number> = {};
   if (cardTracker) {
     for (const suit of ['spade', 'heart', 'diamond', 'club']) {
       const voidOpponents = opponents.filter(s => cardTracker.isPlayerVoidInSuit(s, suit));
@@ -546,7 +589,7 @@ function selectLeadPlay(hand, gameState, seat, team, cardTracker) {
   const teammateVoidInTrump = cardTracker && teammates.some(s => cardTracker.isPlayerVoidInSuit(s, 'trump'));
 
   // 辅助函数：评估花色安全性（对手缺门越多越不安全）
-  function suitSafetyScore(suit) {
+  function suitSafetyScore(suit: string): number {
     const voidCount = suitVoidInfo[suit] || 0;
     if (voidCount >= 2) return -30; // 两个对手都缺门，非常危险
     if (voidCount >= 1) return -15; // 一个对手缺门，较危险
@@ -569,7 +612,7 @@ function selectLeadPlay(hand, gameState, seat, team, cardTracker) {
   }
 
   // 检查同花色A是否全部已知（在手中或已出过），K才安全
-  const suitAcesKnown = {};
+  const suitAcesKnown: Record<string, boolean> = {};
   const deckCount = gameState.deckCount || 2;
   for (const suit of ['spade', 'heart', 'diamond', 'club']) {
     const acesInHand = nonTrumps.filter(c => c.suit === suit && c.rank === 'A').length;
@@ -624,7 +667,7 @@ function selectLeadPlay(hand, gameState, seat, team, cardTracker) {
   // 检查对手是否可能还有主对：计算已出主牌中的对子数
   let opponentsLikelyHaveTrumpPairs = true;
   if (cardTracker && hasScoringPairInVoidSuit) {
-    const allPlayedTrumps = [];
+    const allPlayedTrumps: Card[] = [];
     // 收集所有已出的主牌（王牌+主花色牌）
     for (const c of (cardTracker.playedBySuit?.joker || [])) {
       if (isTrump(c, ts, tl)) allPlayedTrumps.push(c);
@@ -661,7 +704,7 @@ function selectLeadPlay(hand, gameState, seat, team, cardTracker) {
   }
 
   // 7. 长套副牌甩牌
-  const suitCounts = {};
+  const suitCounts: Record<string, number> = {};
   for (const c of nonTrumps) {
     suitCounts[c.suit] = (suitCounts[c.suit] || 0) + 1;
   }
@@ -776,14 +819,14 @@ function selectLeadPlay(hand, gameState, seat, team, cardTracker) {
 /**
  * 从手牌中找出所有对子（同rank同花色的两张牌）
  */
-function findPairs(cards) {
-  const groups = {};
+function findPairsSimple(cards: Card[]): Card[][] {
+  const groups: Record<string, Card[]> = {};
   for (const c of cards) {
     const key = `${c.suit}_${c.rank}`;
     if (!groups[key]) groups[key] = [];
     groups[key].push(c);
   }
-  const pairs = [];
+  const pairs: Card[][] = [];
   for (const key in groups) {
     if (groups[key].length >= 2) {
       pairs.push([groups[key][0], groups[key][1]]);
@@ -795,19 +838,19 @@ function findPairs(cards) {
 /**
  * 从手牌中找出拖拉机（同花色连续对子）
  */
-function findTractors(cards, trumpSuit, trumpLevel) {
-  const pairs = findPairs(cards);
+function findTractorsSimple(cards: Card[], trumpSuit: string | null, trumpLevel: number): Card[][] {
+  const pairs = findPairsSimple(cards);
   if (pairs.length < 2) return [];
 
   // 按花色分组
-  const suitGroups = {};
+  const suitGroups: Record<string, Card[][]> = {};
   for (const pair of pairs) {
     const suit = pair[0].suit;
     if (!suitGroups[suit]) suitGroups[suit] = [];
     suitGroups[suit].push(pair);
   }
 
-  const tractors = [];
+  const tractors: Card[][] = [];
   for (const suit in suitGroups) {
     const suitPairs = suitGroups[suit];
     if (suitPairs.length < 2) continue;
@@ -816,7 +859,7 @@ function findTractors(cards, trumpSuit, trumpLevel) {
     suitPairs.sort((a, b) => RANK_ORDER[a[0].rank] - RANK_ORDER[b[0].rank]);
 
     // 找连续对子
-    let current = [suitPairs[0]];
+    let current: Card[][] = [suitPairs[0]];
     for (let i = 1; i < suitPairs.length; i++) {
       const prevRank = RANK_ORDER[current[current.length - 1][0].rank];
       const currRank = RANK_ORDER[suitPairs[i][0].rank];
@@ -840,7 +883,7 @@ function findTractors(cards, trumpSuit, trumpLevel) {
 /**
  * 确保跟牌数量与首家出牌数量一致
  */
-function ensureCorrectPlayCount(cards, hand, leadCards, trumpSuit, trumpLevel) {
+function ensureCorrectPlayCount(cards: Card[], hand: Card[], leadCards: Card[], trumpSuit: string | null, trumpLevel: number): Card[] {
   if (!leadCards || leadCards.length <= 1 || cards.length === leadCards.length) {
     return cards;
   }
@@ -886,13 +929,13 @@ function ensureCorrectPlayCount(cards, hand, leadCards, trumpSuit, trumpLevel) {
   if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && cards.length < leadCount) {
     const result = [...cards];
     // 按rank分组找对子
-    const groups = {};
+    const groups: Record<string, Card[]> = {};
     for (const c of sameSuitRemaining) {
       if (!groups[c.rank]) groups[c.rank] = [];
       groups[c.rank].push(c);
     }
     // 优先找和已出牌同rank的对子（保持同rank对牌）
-    const playedRanks = {};
+    const playedRanks: Record<string, number> = {};
     for (const c of cards) {
       if (!playedRanks[c.rank]) playedRanks[c.rank] = 0;
       playedRanks[c.rank]++;
@@ -933,7 +976,7 @@ function ensureCorrectPlayCount(cards, hand, leadCards, trumpSuit, trumpLevel) {
 /**
  * 跟牌策略 - 核心改进
  */
-function selectFollowPlay(hand, leadCards, gameState, seat, team, cardTracker) {
+export function selectFollowPlay(hand: Card[], leadCards: Card[], gameState: any, seat: number, team: number, cardTracker?: CardTracker): Card[] {
   const analysis = analyzeGameState(hand, gameState, seat, team, cardTracker);
   const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
   const leadIsTrump = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel);
@@ -949,7 +992,7 @@ function selectFollowPlay(hand, leadCards, gameState, seat, team, cardTracker) {
   // 找出其他牌
   const otherCards = hand.filter(c => !sameSuitCards.includes(c));
 
-  let play;
+  let play: Card[];
 
   // ============= 核心策略：根据对手/队友出牌调整 =============
 
@@ -982,8 +1025,8 @@ function selectFollowPlay(hand, leadCards, gameState, seat, team, cardTracker) {
  * 情况1：队友出牌且队友正在赢
  * 策略：跟最小的牌，带上分牌
  */
-function selectTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis) {
-  const candidates = [];
+function selectTeammateWinningPlay(hand: Card[], leadCards: Card[], sameSuitCards: Card[], otherCards: Card[], gameState: any, analysis: Analysis): Card[] {
+  const candidates: Candidate[] = [];
   const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
 
   // 最后一个出牌且队友确定最大
@@ -1042,7 +1085,7 @@ function selectTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
 
     // 如果首家出对牌/拖拉机，优先跟对牌
     if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
-      const pairs = findPairs(sameSuitCards);
+      const pairs = findPairsSimple(sameSuitCards);
       if (pairs.length > 0) {
         pairs.sort((a, b) =>
           evaluateCardValue(a[0], gameState.trumpSuit, gameState.trumpLevel) -
@@ -1144,7 +1187,7 @@ function selectTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
 
     // 对手贴了分牌时，必须将吃接管，不能让对手得分
     if (trickPoints >= 5) {
-      const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 85, trickPoints, analysis.isLastPlayer, analysis);
+      const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 85, trickPoints, analysis.isLastPlayer!, analysis);
       candidates.push(...chopCandidates);
     }
 
@@ -1191,13 +1234,13 @@ function selectTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
  * 情况2：队友出牌但对手在赢
  * 策略：如果能管住对手就出大牌，否则跟最小的
  */
-function selectTeammateLosingPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis) {
-  const candidates = [];
+function selectTeammateLosingPlay(hand: Card[], leadCards: Card[], sameSuitCards: Card[], otherCards: Card[], gameState: any, analysis: Analysis): Card[] {
+  const candidates: Candidate[] = [];
   const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
 
   // 如果首家出拖拉机，优先考虑拖拉机
   if (leadPattern.type === 'tractor' && sameSuitCards.length >= 4) {
-    const tractors = findTractors(sameSuitCards, gameState.trumpSuit, gameState.trumpLevel);
+    const tractors = findTractorsSimple(sameSuitCards, gameState.trumpSuit, gameState.trumpLevel);
     const leadSuit = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel) ? 'trump' : leadCards[0].suit;
 
     const winnerCards = analysis.currentWinnerCards || leadCards;
@@ -1232,7 +1275,7 @@ function selectTeammateLosingPlay(hand, leadCards, sameSuitCards, otherCards, ga
 
   // 如果首家出对牌或拖拉机，考虑对牌
   if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
-    const pairs = findPairs(sameSuitCards);
+    const pairs = findPairsSimple(sameSuitCards);
     const leadSuit = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel) ? 'trump' : leadCards[0].suit;
     const winnerCards = analysis.currentWinnerCards || leadCards;
 
@@ -1270,8 +1313,8 @@ function selectTeammateLosingPlay(hand, leadCards, sameSuitCards, otherCards, ga
     const winnerCards = analysis.currentWinnerCards || leadCards;
     const leadIsTrump = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel);
 
-    const winningPlays = [];
-    const losingPlays = [];
+    const winningPlays: Candidate[] = [];
+    const losingPlays: Candidate[] = [];
 
     for (const card of sameSuitCards) {
       const testPlay = [card];
@@ -1306,8 +1349,8 @@ function selectTeammateLosingPlay(hand, leadCards, sameSuitCards, otherCards, ga
         // 检查是否有好副牌（A/拖拉机/大对子）值得抢出牌权后出牌
         const nonTrumps = otherCards.filter(c => !isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
         const hasGoodOffSuit = nonTrumps.some(c => c.rank === 'A') ||
-          findPairs(nonTrumps).length > 0 ||
-          findTractors(nonTrumps, gameState.trumpSuit, gameState.trumpLevel).length > 0;
+          findPairsSimple(nonTrumps).length > 0 ||
+          findTractorsSimple(nonTrumps, gameState.trumpSuit, gameState.trumpLevel).length > 0;
 
         if (hasGoodOffSuit) {
           // 有好副牌：出小王/级牌/A抢出牌权（排除大王留保底，排除K/10/5不浪费分牌）
@@ -1356,7 +1399,7 @@ function selectTeammateLosingPlay(hand, leadCards, sameSuitCards, otherCards, ga
   } else {
     // 没有同花色，优先将吃管住对手
     const trickPoints = analysis.trickPoints || 0;
-    const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints, analysis.isLastPlayer, analysis);
+    const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints, analysis.isLastPlayer!, analysis);
     candidates.push(...chopCandidates);
 
     // 垫牌
@@ -1386,8 +1429,8 @@ function selectTeammateLosingPlay(hand, leadCards, sameSuitCards, otherCards, ga
  * 情况3：对手出牌但队友在赢
  * 策略：跟最小的牌，不要破坏队友的优势
  */
-function selectOpponentLeadingButTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis) {
-  const candidates = [];
+function selectOpponentLeadingButTeammateWinningPlay(hand: Card[], leadCards: Card[], sameSuitCards: Card[], otherCards: Card[], gameState: any, analysis: Analysis): Card[] {
+  const candidates: Candidate[] = [];
   const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
 
   // 最后一个出牌且队友确定最大
@@ -1442,7 +1485,7 @@ function selectOpponentLeadingButTeammateWinningPlay(hand, leadCards, sameSuitCa
 
     // 如果首家出对牌，跟最小的对牌
     if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
-      const pairs = findPairs(sameSuitCards);
+      const pairs = findPairsSimple(sameSuitCards);
       if (pairs.length > 0) {
         pairs.sort((a, b) =>
           evaluateCardValue(a[0], gameState.trumpSuit, gameState.trumpLevel) -
@@ -1516,7 +1559,7 @@ function selectOpponentLeadingButTeammateWinningPlay(hand, leadCards, sameSuitCa
 
     // 对手贴了分牌时，需要将吃确保得分不被对手捡走
     if (trickPoints >= 5) {
-      const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints, analysis.isLastPlayer, analysis);
+      const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints, analysis.isLastPlayer!, analysis);
       candidates.push(...chopCandidates);
     }
 
@@ -1560,14 +1603,14 @@ function selectOpponentLeadingButTeammateWinningPlay(hand, leadCards, sameSuitCa
  * 情况4：对手出牌且对手在赢
  * 策略：如果能管住就出大牌，否则跟最小的
  */
-function selectOpponentWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis) {
-  const candidates = [];
+function selectOpponentWinningPlay(hand: Card[], leadCards: Card[], sameSuitCards: Card[], otherCards: Card[], gameState: any, analysis: Analysis): Card[] {
+  const candidates: Candidate[] = [];
   const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
   const winnerCards = analysis.currentWinnerCards || leadCards;
 
   // 如果首家出拖拉机，优先考虑拖拉机
   if (leadPattern.type === 'tractor' && sameSuitCards.length >= 4) {
-    const tractors = findTractors(sameSuitCards, gameState.trumpSuit, gameState.trumpLevel);
+    const tractors = findTractorsSimple(sameSuitCards, gameState.trumpSuit, gameState.trumpLevel);
     const leadSuit = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel) ? 'trump' : leadCards[0].suit;
 
     for (const tractor of tractors) {
@@ -1601,7 +1644,7 @@ function selectOpponentWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
 
   // 如果首家出对牌或拖拉机，考虑对牌
   if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
-    const pairs = findPairs(sameSuitCards);
+    const pairs = findPairsSimple(sameSuitCards);
     const leadSuit = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel) ? 'trump' : leadCards[0].suit;
 
     for (const pair of pairs) {
@@ -1637,8 +1680,8 @@ function selectOpponentWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
     const leadSuit = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel) ? 'trump' : leadCards[0].suit;
     const leadIsTrump = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel);
 
-    const winningPlays = [];
-    const losingPlays = [];
+    const winningPlays: Candidate[] = [];
+    const losingPlays: Candidate[] = [];
 
     for (const card of sameSuitCards) {
       const testPlay = [card];
@@ -1673,8 +1716,8 @@ function selectOpponentWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
         // 检查是否有好副牌（A/拖拉机/大对子）值得抢出牌权后出牌
         const nonTrumps = otherCards.filter(c => !isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
         const hasGoodOffSuit = nonTrumps.some(c => c.rank === 'A') ||
-          findPairs(nonTrumps).length > 0 ||
-          findTractors(nonTrumps, gameState.trumpSuit, gameState.trumpLevel).length > 0;
+          findPairsSimple(nonTrumps).length > 0 ||
+          findTractorsSimple(nonTrumps, gameState.trumpSuit, gameState.trumpLevel).length > 0;
 
         if (hasGoodOffSuit) {
           // 有好副牌：出小王/级牌/A抢出牌权（排除大王留保底，排除K/10/5不浪费分牌）
@@ -1725,7 +1768,7 @@ function selectOpponentWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
   } else {
     // 没有同花色，优先考虑主牌将吃
     const trickPoints = analysis.trickPoints || 0;
-    const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints, analysis.isLastPlayer, analysis);
+    const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints, analysis.isLastPlayer!, analysis);
     candidates.push(...chopCandidates);
 
     // 垫牌
@@ -1754,7 +1797,7 @@ function selectOpponentWinningPlay(hand, leadCards, sameSuitCards, otherCards, g
 /**
  * 默认跟牌策略
  */
-function selectDefaultFollowPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis) {
+function selectDefaultFollowPlay(hand: Card[], leadCards: Card[], sameSuitCards: Card[], otherCards: Card[], gameState: any, analysis: Analysis): Card[] {
   const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
 
   if (sameSuitCards.length > 0) {
@@ -1765,7 +1808,7 @@ function selectDefaultFollowPlay(hand, leadCards, sameSuitCards, otherCards, gam
 
     // 如果首家出对牌，优先跟对牌
     if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
-      const pairs = findPairs(sameSuitCards);
+      const pairs = findPairsSimple(sameSuitCards);
       if (pairs.length > 0) {
         pairs.sort((a, b) =>
           evaluateCardValue(a[0], gameState.trumpSuit, gameState.trumpLevel) -
@@ -1780,7 +1823,7 @@ function selectDefaultFollowPlay(hand, leadCards, sameSuitCards, otherCards, gam
 
   // 没有同花色，优先将吃
   const trickPoints = analysis.trickPoints || 0;
-  const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 70, trickPoints, analysis.isLastPlayer, analysis);
+  const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 70, trickPoints, analysis.isLastPlayer!, analysis);
   if (chopCandidates.length > 0) {
     chopCandidates.sort((a, b) => b.score - a.score);
     return chopCandidates[0].cards;
@@ -1809,7 +1852,7 @@ function selectDefaultFollowPlay(hand, leadCards, sameSuitCards, otherCards, gam
 /**
  * 扣底策略
  */
-function selectBottomCards(hand, bottomCount, trumpSuit, trumpLevel, isDealer) {
+export function selectBottomCards(hand: Card[], bottomCount: number, trumpSuit: string | null, trumpLevel: number, isDealer: boolean): Card[] {
   // 庄家扣底策略：保留大牌，扣掉危险牌
   const sorted = [...hand].sort((a, b) => {
     const aValue = _bottomRemovalPriority(a, trumpSuit, trumpLevel, hand);
@@ -1820,7 +1863,7 @@ function selectBottomCards(hand, bottomCount, trumpSuit, trumpLevel, isDealer) {
   return sorted.slice(0, bottomCount);
 }
 
-function _bottomRemovalPriority(card, trumpSuit, trumpLevel, hand) {
+function _bottomRemovalPriority(card: Card, trumpSuit: string | null, trumpLevel: number, hand: Card[]): number {
   let priority = 0;
 
   // 分牌很危险，优先扣掉
@@ -1853,21 +1896,21 @@ function _bottomRemovalPriority(card, trumpSuit, trumpLevel, hand) {
 /**
  * 亮主策略
  */
-function decideBid(hand, trumpLevel) {
+export function decideBid(hand: Card[], trumpLevel: number): Card[] | null {
   const levelStr = getRankFromLevel(trumpLevel);
   const levelCards = hand.filter(c => c.rank === levelStr && c.suit !== 'joker');
   const jokers = hand.filter(c => c.suit === 'joker');
   const bigJokers = jokers.filter(c => c.rank === 'big');
 
   // 按花色分组级牌
-  const bySuit = {};
+  const bySuit: Record<string, Card[]> = {};
   for (const c of levelCards) {
     if (!bySuit[c.suit]) bySuit[c.suit] = [];
     bySuit[c.suit].push(c);
   }
 
   // 找到最好的花色
-  let bestSuit = null;
+  let bestSuit: string | null = null;
   let bestCount = 0;
   for (const suit in bySuit) {
     if (bySuit[suit].length > bestCount) {
@@ -1892,12 +1935,12 @@ function decideBid(hand, trumpLevel) {
 
   // 首次亮主：需要2+同花色级牌
   if (bestCount >= 2 && strength >= 30) {
-    return bySuit[bestSuit].slice(0, 2);
+    return bySuit[bestSuit!].slice(0, 2);
   }
 
   // 用王反主
   if (bestCount >= 1 && jokers.length >= 1 && strength >= 30) {
-    return [...bySuit[bestSuit].slice(0, 1), jokers[0]];
+    return [...bySuit[bestSuit!].slice(0, 1), jokers[0]];
   }
 
   // 无主：2+王
@@ -1910,8 +1953,13 @@ function decideBid(hand, trumpLevel) {
 
 // ==================== 主AI类 ====================
 
-class AdvancedAI {
-  constructor(seat, team, cardTracker) {
+export class AdvancedAI {
+  seat: number;
+  team: number;
+  cardTracker: CardTracker;
+  hand!: Card[];
+
+  constructor(seat: number, team: number, cardTracker: CardTracker) {
     this.seat = seat;
     this.team = team;
     this.cardTracker = cardTracker;
@@ -1920,7 +1968,7 @@ class AdvancedAI {
   /**
    * 选择最佳出牌
    */
-  selectBestPlay(hand, leadCards, gameState) {
+  selectBestPlay(hand: Card[], leadCards: Card[] | null, gameState: any): Card[] {
     // 更新牌追踪器
     if (gameState.trumpSuit) {
       this.cardTracker.setTrump(gameState.trumpSuit, gameState.trumpLevel);
@@ -1931,7 +1979,7 @@ class AdvancedAI {
       this.cardTracker.recordTrick(trick);
     }
 
-    let selectedCards;
+    let selectedCards: Card[];
 
     if (!leadCards || leadCards.length === 0) {
       // 首家出牌
@@ -1963,8 +2011,8 @@ class AdvancedAI {
   /**
    * 生成备选候选
    */
-  generateFallbackCandidates(hand, leadCards, gameState) {
-    const candidates = [];
+  generateFallbackCandidates(hand: Card[], leadCards: Card[] | null, gameState: any): Card[][] {
+    const candidates: Card[][] = [];
     const leadPattern = leadCards ? getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel) : null;
     const leadIsTrump = leadCards ? isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel) : false;
     const leadSuit = leadIsTrump ? 'trump' : (leadCards ? leadCards[0].suit : null);
@@ -2007,14 +2055,14 @@ class AdvancedAI {
   /**
    * 亮主决策
    */
-  decideBid(gameState) {
+  decideBid(gameState: any): Card[] | null {
     return decideBid(this.hand, gameState.trumpLevel);
   }
 
   /**
    * 扣底决策
    */
-  decideBottom(gameState) {
+  decideBottom(gameState: any): Card[] {
     return selectBottomCards(
       this.hand,
       gameState.bottomCount || 8,
@@ -2024,18 +2072,3 @@ class AdvancedAI {
     );
   }
 }
-
-module.exports = {
-  AdvancedAI,
-  evaluateCardValue,
-  evaluateCardsValue,
-  evaluateHandStrength,
-  findPairs,
-  findTractors,
-  analyzeGameState,
-  generateChopCandidates,
-  selectLeadPlay,
-  selectFollowPlay,
-  selectBottomCards,
-  decideBid
-};

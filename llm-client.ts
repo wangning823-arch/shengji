@@ -1,11 +1,34 @@
-const https = require('https');
+import * as https from 'https';
 
-class LLMClient {
-  constructor(config) {
+interface LLMConfig {
+  provider?: string;
+  apiKey?: string;
+  model?: string;
+  baseURL?: string;
+  timeout?: number;
+  headers?: Record<string, string>;
+}
+
+interface RequestOptions {
+  hostname: string;
+  path: string;
+  method: string;
+  headers: Record<string, string>;
+}
+
+export class LLMClient {
+  private provider: string;
+  private apiKey: string;
+  private model: string;
+  private baseURL: string | undefined;
+  private timeout: number;
+  private customHeaders: Record<string, string>;
+
+  constructor(config: LLMConfig) {
     this.provider = config.provider || 'anthropic';
-    this.apiKey = config.apiKey;
-    this.model = config.model;
-    this.baseURL = config.baseURL; // 支持自定义URL
+    this.apiKey = config.apiKey || '';
+    this.model = config.model || '';
+    this.baseURL = config.baseURL;
     this.timeout = config.timeout || 30000;
     this.customHeaders = config.headers || {};
 
@@ -15,7 +38,7 @@ class LLMClient {
     }
   }
 
-  async complete(prompt, options = {}) {
+  async complete(prompt: string, options: Record<string, any> = {}): Promise<string> {
     if (this.provider === 'anthropic') {
       return this.callAnthropic(prompt, options);
     } else if (this.provider === 'openai') {
@@ -27,7 +50,7 @@ class LLMClient {
     }
   }
 
-  async callAnthropic(prompt, options = {}) {
+  private async callAnthropic(prompt: string, options: Record<string, any> = {}): Promise<string> {
     const data = JSON.stringify({
       model: options.model || this.model || 'claude-3-haiku-20240307',
       max_tokens: options.maxTokens || 1024,
@@ -38,11 +61,11 @@ class LLMClient {
       temperature: options.temperature || 0.7
     });
 
-    const url = this.baseURL ? new URL(this.baseURL) : { hostname: 'api.anthropic.com', path: '/v1/messages' };
+    const url = this.baseURL ? new URL(this.baseURL) : null;
 
     return this.makeRequest({
-      hostname: url.hostname || 'api.anthropic.com',
-      path: url.pathname || '/v1/messages',
+      hostname: url?.hostname || 'api.anthropic.com',
+      path: url?.pathname || '/v1/messages',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -50,13 +73,13 @@ class LLMClient {
         'anthropic-version': '2023-06-01',
         ...this.customHeaders
       }
-    }, data, (body) => {
+    }, data, (body: string) => {
       const result = JSON.parse(body);
       return result.content?.[0]?.text || result.response || result.output || result.message || body;
     });
   }
 
-  async callOpenAI(prompt, options = {}) {
+  private async callOpenAI(prompt: string, options: Record<string, any> = {}): Promise<string> {
     const data = JSON.stringify({
       model: options.model || this.model || 'gpt-4o-mini',
       messages: [{
@@ -67,25 +90,25 @@ class LLMClient {
       temperature: options.temperature || 0.7
     });
 
-    const url = this.baseURL ? new URL(this.baseURL) : { hostname: 'api.openai.com', path: '/v1/chat/completions' };
+    const url = this.baseURL ? new URL(this.baseURL) : null;
 
     return this.makeRequest({
-      hostname: url.hostname || 'api.openai.com',
-      path: url.pathname || '/v1/chat/completions',
+      hostname: url?.hostname || 'api.openai.com',
+      path: url?.pathname || '/v1/chat/completions',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.apiKey}`,
         ...this.customHeaders
       }
-    }, data, (body) => {
+    }, data, (body: string) => {
       const result = JSON.parse(body);
       return result.choices?.[0]?.message?.content || result.response || result.output || body;
     });
   }
 
-  async callCustom(prompt, options = {}) {
-    const url = new URL(this.baseURL);
+  private async callCustom(prompt: string, options: Record<string, any> = {}): Promise<string> {
+    const url = new URL(this.baseURL!);
 
     // 默认用OpenAI兼容格式，也可以自定义
     const data = options.body || JSON.stringify({
@@ -98,7 +121,7 @@ class LLMClient {
       temperature: options.temperature || 0.7
     });
 
-    const headers = {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...this.customHeaders
     };
@@ -112,7 +135,7 @@ class LLMClient {
       path: url.pathname,
       method: 'POST',
       headers
-    }, data, (body) => {
+    }, data, (body: string) => {
       try {
         const result = JSON.parse(body);
         // 尝试各种常见的响应格式
@@ -129,14 +152,14 @@ class LLMClient {
     });
   }
 
-  makeRequest(options, data, parser) {
+  private makeRequest(options: RequestOptions, data: string, parser: (body: string) => string): Promise<string> {
     return new Promise((resolve, reject) => {
       const req = https.request(options, (res) => {
         let body = '';
-        res.on('data', (chunk) => body += chunk);
+        res.on('data', (chunk: Buffer) => body += chunk);
         res.on('end', () => {
           try {
-            if (res.statusCode >= 200 && res.statusCode < 300) {
+            if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
               resolve(parser(body));
             } else {
               reject(new Error(`LLM API error: ${res.statusCode} - ${body}`));
@@ -158,5 +181,3 @@ class LLMClient {
     });
   }
 }
-
-module.exports = { LLMClient };
