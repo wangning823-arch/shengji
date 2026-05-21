@@ -62,10 +62,18 @@ class CardTracker {
 
     for (const play of trick.plays) {
       this.recordPlayedCards(play.cards);
-      if (play.seat !== trick.plays[0].seat && !leadIsTrump) {
-        const followedSuit = play.cards.some(c => !isTrump(c, this.trumpSuit, this.trumpLevel) && c.suit === leadSuit);
-        if (!followedSuit) {
-          this.voidMap[play.seat][leadSuit] = true;
+      if (play.seat !== trick.plays[0].seat) {
+        if (leadIsTrump) {
+          // 主牌lead：跟不了主牌说明缺主
+          const followedTrump = play.cards.some(c => isTrump(c, this.trumpSuit, this.trumpLevel));
+          if (!followedTrump) {
+            this.voidMap[play.seat]['trump'] = true;
+          }
+        } else {
+          const followedSuit = play.cards.some(c => !isTrump(c, this.trumpSuit, this.trumpLevel) && c.suit === leadSuit);
+          if (!followedSuit) {
+            this.voidMap[play.seat][leadSuit] = true;
+          }
         }
       }
     }

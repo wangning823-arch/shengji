@@ -541,6 +541,10 @@ function selectLeadPlay(hand, gameState, seat, team, cardTracker) {
     }
   }
 
+  // 检测队友是否无主
+  const teammates = [0, 1, 2, 3].filter(s => gameState.players[s]?.team === team && s !== seat);
+  const teammateVoidInTrump = cardTracker && teammates.some(s => cardTracker.isPlayerVoidInSuit(s, 'trump'));
+
   // 辅助函数：评估花色安全性（对手缺门越多越不安全）
   function suitSafetyScore(suit) {
     const voidCount = suitVoidInfo[suit] || 0;
@@ -691,12 +695,30 @@ function selectLeadPlay(hand, gameState, seat, team, cardTracker) {
   const smallTrumps = trumps.filter(c => !(c.suit === 'joker' && c.rank === 'big') && !(c.suit === 'joker' && c.rank === 'small'));
   if (smallTrumps.length > 0) {
     smallTrumps.sort((a, b) => evaluateCardValue(a, ts, tl) - evaluateCardValue(b, ts, tl));
-    let trumpClearScore = 70;
-    // 闲家方有强保底需求时，降低小主牌出牌意愿（保留大牌抢底）
-    if (!isMyTeamDealer2 && analysis.bottomProtection >= 2) {
-      trumpClearScore = 35;
+    // 队友无主时，出小主牌等于1v2，对手可以用K/10跑分
+    // 只出A/大牌，不出小于K的主牌
+    if (teammateVoidInTrump) {
+      // K/A/2/级牌可以出，小于K的普通主牌不出
+      const levelRank = getRankFromLevel(tl);
+      const bigTrumps = smallTrumps.filter(c =>
+        c.rank === 'A' ||
+        RANK_ORDER[c.rank] >= RANK_ORDER['K'] ||
+        c.rank === levelRank // 级牌（如打10时，10是级牌，非常大）
+      );
+      if (bigTrumps.length > 0) {
+        // 出最小的大主牌（K优先，不浪费A/级牌）
+        bigTrumps.sort((a, b) => evaluateCardValue(a, ts, tl) - evaluateCardValue(b, ts, tl));
+        candidates.push({ cards: [bigTrumps[0]], score: 70, reason: '队友无主,出大主清主' });
+      }
+      // 不出小主牌
+    } else {
+      let trumpClearScore = 70;
+      // 闲家方有强保底需求时，降低小主牌出牌意愿（保留大牌抢底）
+      if (!isMyTeamDealer2 && analysis.bottomProtection >= 2) {
+        trumpClearScore = 35;
+      }
+      candidates.push({ cards: [smallTrumps[0]], score: trumpClearScore, reason: '出小主牌清主' });
     }
-    candidates.push({ cards: [smallTrumps[0]], score: trumpClearScore, reason: '出小主牌清主' });
   }
 
   // 9.5 小王 — 小王保底概率低，不需要特意保留，可以积极用于清主
