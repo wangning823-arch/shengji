@@ -33,6 +33,7 @@ const App = {
     this.detectMobile();
     window.addEventListener('orientationchange', () => this.handleOrientationChange());
     window.addEventListener('resize', () => this.handleOrientationChange());
+    this.setupHandDrag();
   },
 
   isMobile: false,
@@ -103,6 +104,10 @@ const App = {
   checkOrientation() {
     const gameScreen = document.getElementById('game-screen');
     if (!gameScreen || !gameScreen.classList.contains('active')) return;
+    // 手机上始终应用 mobile-game 类
+    if (this.isMobile) {
+      document.body.classList.add('mobile-game');
+    }
     // 游戏结束显示结果时，不提示旋转
     const resultOverlay = document.getElementById('game-result-overlay');
     if (resultOverlay && !resultOverlay.classList.contains('hidden')) return;
@@ -119,19 +124,50 @@ const App = {
     if (!el) {
       el = document.createElement('div');
       el.id = 'rotate-hint';
-      el.innerHTML = '<button id="btn-go-fullscreen" class="btn primary">点击进入横屏全屏</button>';
-      el.querySelector('#btn-go-fullscreen').onclick = () => {
-        this.requestGameFullscreen();
-        this.hideRotateHint();
-      };
+      el.textContent = '横屏体验更佳';
       document.body.appendChild(el);
     }
     el.style.display = 'flex';
+    // 3秒后自动隐藏
+    if (this._rotateHintTimer) clearTimeout(this._rotateHintTimer);
+    this._rotateHintTimer = setTimeout(() => this.hideRotateHint(), 3000);
   },
 
   hideRotateHint() {
     const el = document.getElementById('rotate-hint');
     if (el) el.style.display = 'none';
+  },
+
+  setupHandDrag() {
+    const hand = document.getElementById('my-hand');
+    if (!hand) return;
+    let isDragging = false;
+    let startX = 0;
+    let scrollLeft = 0;
+    const getPos = (e) => e.touches ? e.touches[0].pageX : e.pageX;
+    const onStart = (e) => {
+      isDragging = true;
+      startX = getPos(e);
+      scrollLeft = hand.scrollLeft;
+      hand.style.cursor = 'grabbing';
+    };
+    const onMove = (e) => {
+      if (!isDragging) return;
+      const x = getPos(e);
+      hand.scrollLeft = scrollLeft - (x - startX);
+    };
+    const onEnd = () => {
+      isDragging = false;
+      hand.style.cursor = 'grab';
+    };
+    hand.addEventListener('mousedown', onStart);
+    hand.addEventListener('mousemove', onMove);
+    hand.addEventListener('mouseup', onEnd);
+    hand.addEventListener('mouseleave', onEnd);
+    hand.addEventListener('touchstart', onStart, { passive: true });
+    hand.addEventListener('touchmove', onMove, { passive: true });
+    hand.addEventListener('touchend', onEnd);
+    hand.style.cursor = 'grab';
   },
 
   connect() {
@@ -457,6 +493,10 @@ const App = {
           localStorage.setItem('shengji_game', JSON.stringify({ roomId: this.roomId, seat: this.seat }));
         }
         this.showScreen('game-screen');
+        // 手机上始终应用 mobile-game 类
+        if (this.isMobile) {
+          document.body.classList.add('mobile-game');
+        }
         this.requestGameFullscreen();
         this.setupOneTimeFullscreenTrigger();
         this.updateGameUI();
