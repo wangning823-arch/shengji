@@ -743,7 +743,12 @@ const App = {
 
     const gs = this.gameState;
     document.getElementById('trump-info').textContent = '主牌: ' + (gs.trumpSuit ? this.SUIT_NAMES[gs.trumpSuit] : '无主');
-    document.getElementById('level-info').textContent = '打: ' + gs.trumpLevel;
+    const RANKS = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
+    let levelRank;
+    if (gs.trumpLevel === 2) levelRank = '2';
+    else if (gs.trumpLevel >= 3 && gs.trumpLevel <= 14) levelRank = RANKS[gs.trumpLevel - 3];
+    else levelRank = String(gs.trumpLevel);
+    document.getElementById('level-info').textContent = '打: ' + levelRank;
     // 只显示闲家得分（庄家不得分）
     const dealerTeam = gs.players[gs.dealer]?.team;
     const idleScore = dealerTeam === 1 ? gs.scores.team2 : gs.scores.team1;

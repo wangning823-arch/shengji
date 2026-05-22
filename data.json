@@ -127,6 +127,22 @@
       "nickname": "你好",
       "avatar": "",
       "created_at": 1779283513761
+    },
+    {
+      "id": 17,
+      "union_id": "guest_mpflxb2xnpu3",
+      "open_id": null,
+      "nickname": "AA",
+      "avatar": "",
+      "created_at": 1779374987098
+    },
+    {
+      "id": 18,
+      "union_id": "guest_mpgdh8hyr25y",
+      "open_id": null,
+      "nickname": "游客r25y",
+      "avatar": "",
+      "created_at": 1779421266502
     }
   ],
   "rooms": [],
