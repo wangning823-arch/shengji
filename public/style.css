@@ -1222,7 +1222,7 @@ body.mobile-game #my-hand {
   max-width: 100vw;
 }
 
-/* 竖屏：手牌多行显示 */
+/* 竖屏：手牌多行显示，最多4行，JS 动态缩牌 */
 @media (orientation: portrait) {
   body.mobile-game #my-hand {
     flex-wrap: wrap;
@@ -1233,7 +1233,6 @@ body.mobile-game #my-hand {
     gap: 2px;
     bottom: 45px;
     padding: 4px 8px;
-    max-height: 210px;
     overflow-y: auto;
     overflow-x: hidden;
     align-content: flex-start;
@@ -1253,6 +1252,11 @@ body.mobile-game #my-hand {
   body.mobile-game #my-hand .card .suit-bottom {
     font-size: 9px;
   }
+
+  /* 花色分组间距（竖屏下更大一些） */
+  body.mobile-game #my-hand .card.suit-gap {
+    margin-left: 4px !important;
+  }
 }
 
 /* 横屏：单行可拖动 */
@@ -1263,10 +1267,11 @@ body.mobile-game #my-hand {
     overflow-y: hidden;
     scrollbar-width: none;
     -ms-overflow-style: none;
-    justify-content: center;
-    max-width: 100vw;
-    left: 50%;
-    transform: translateX(-50%);
+    justify-content: flex-start;
+    left: 0;
+    right: 0;
+    width: auto;
+    transform: none;
     padding: 4px 20px;
     -webkit-overflow-scrolling: touch;
   }
@@ -1285,7 +1290,7 @@ body.mobile-game #my-hand .card {
   flex-shrink: 0;
   margin-left: -12px;
   cursor: pointer;
-  transition: transform 0.1s, margin-top 0.1s;
+  transition: transform 0.1s, margin-left 0.15s ease, margin-top 0.1s;
 }
 
 body.mobile-game #my-hand .card .suit-top,
@@ -1296,6 +1301,22 @@ body.mobile-game #my-hand .card .suit-bottom {
 
 body.mobile-game #my-hand .card:first-child {
   margin-left: 0;
+}
+
+/* 横屏覆盖：首尾 auto margin 居中 */
+@media (orientation: landscape) {
+  body.mobile-game #my-hand .card:first-child {
+    margin-left: auto;
+  }
+
+  body.mobile-game #my-hand .card:last-child {
+    margin-right: auto;
+  }
+}
+
+/* 花色分组间距 */
+body.mobile-game #my-hand .card.suit-gap {
+  margin-left: 6px !important;
 }
 
 body.mobile-game #my-hand .card:hover {

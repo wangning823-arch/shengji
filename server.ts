@@ -1201,7 +1201,8 @@ const messageHandlers: MessageHandlers = {
         send(ws, { type: 'game_started', hand: game.players[player.seat].hand, dealer: game.dealer, trumpLevel: game.trumpLevel, seat: player.seat, state: game.toJSON(player.seat) });
         send(ws, { type: 'game_state', state: game.toJSON(player.seat) });
         if (game.currentSeat === player.seat) {
-          send(ws, { type: 'turn_changed', seat: game.currentSeat, phase: game.status === 'playing' ? 'playing' : 'dealing', rebidPhase: (game as any)._rebidPhase });
+          const phase = game.status === 'playing' ? 'playing' : game.status === 'taking_bottom' ? 'taking_bottom' : 'dealing';
+			send(ws, { type: 'turn_changed', seat: game.currentSeat, phase, rebidPhase: (game as any)._rebidPhase });
         }
       }
       return;

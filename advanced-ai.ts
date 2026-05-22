@@ -148,26 +148,57 @@ export function findPairs(hand: Card[], trumpSuit?: string | null, trumpLevel?: 
 }
 
 /**
+ * 找出手牌中的所有三同张/四同张
+ */
+export function findTriples(hand: Card[], trumpSuit?: string | null, trumpLevel?: number): Card[][] {
+  const triples: Card[][] = [];
+  const grouped = groupByRank(hand);
+
+  for (const key in grouped) {
+    if (grouped[key].length >= 3) {
+      triples.push(grouped[key].slice(0, grouped[key].length >= 4 ? 4 : 3));
+    }
+  }
+
+  return triples;
+}
+
+/**
  * 找出手牌中的所有拖拉机
  */
 export function findTractors(hand: Card[], trumpSuit: string | null, trumpLevel: number): Card[][] {
   const tractors: Card[][] = [];
+
+  // 对子拖拉机
   const pairs = findPairs(hand, trumpSuit, trumpLevel);
-
-  if (pairs.length < 2) return tractors;
-
-  // 按牌力排序
-  pairs.sort((a, b) => evaluateCardValue(a[0], trumpSuit, trumpLevel) - evaluateCardValue(b[0], trumpSuit, trumpLevel));
-
-  // 尝试所有连续对子组合
-  for (let len = pairs.length; len >= 2; len--) {
-    for (let start = 0; start <= pairs.length - len; start++) {
-      const candidate: Card[] = [];
-      for (let i = start; i < start + len; i++) {
-        candidate.push(pairs[i][0], pairs[i][1]);
+  if (pairs.length >= 2) {
+    pairs.sort((a, b) => evaluateCardValue(a[0], trumpSuit, trumpLevel) - evaluateCardValue(b[0], trumpSuit, trumpLevel));
+    for (let len = pairs.length; len >= 2; len--) {
+      for (let start = 0; start <= pairs.length - len; start++) {
+        const candidate: Card[] = [];
+        for (let i = start; i < start + len; i++) {
+          candidate.push(pairs[i][0], pairs[i][1]);
+        }
+        if (isTractor(candidate, trumpSuit, trumpLevel)) {
+          tractors.push(candidate);
+        }
       }
-      if (isTractor(candidate, trumpSuit, trumpLevel)) {
-        tractors.push(candidate);
+    }
+  }
+
+  // 三同张/四同张拖拉机
+  const triples = findTriples(hand, trumpSuit, trumpLevel);
+  if (triples.length >= 2) {
+    triples.sort((a, b) => evaluateCardValue(a[0], trumpSuit, trumpLevel) - evaluateCardValue(b[0], trumpSuit, trumpLevel));
+    for (let len = triples.length; len >= 2; len--) {
+      for (let start = 0; start <= triples.length - len; start++) {
+        const candidate: Card[] = [];
+        for (let i = start; i < start + len; i++) {
+          candidate.push(...triples[i]);
+        }
+        if (isTractor(candidate, trumpSuit, trumpLevel)) {
+          tractors.push(candidate);
+        }
       }
     }
   }
@@ -403,6 +434,17 @@ function _generateChopCandidatesMax(trumpCards: Card[], leadCards: Card[], leadP
       );
       candidates.push({ cards: trumpPairs[0], score: chopScore, reason: `对主将吃${label}` });
     }
+  } else if (leadPattern.type === 'triple') {
+    const trumpTriples = findTriples(trumpCards);
+    if (trumpTriples.length > 0) {
+      trumpTriples.sort((a, b) => sortOrder(a[0], b[0]));
+      candidates.push({ cards: trumpTriples[0].slice(0, leadCards.length), score: chopScore, reason: `三同张主将吃${label}` });
+    }
+    const trumpPairs = findPairs(trumpCards);
+    if (trumpPairs.length > 0 && leadCards.length >= 2) {
+      trumpPairs.sort((a, b) => sortOrder(a[0], b[0]));
+      candidates.push({ cards: trumpPairs[0], score: chopScore - 20, reason: `对主部分将吃${label}` });
+    }
   } else if (leadPattern.type === 'tractor') {
     const trumpTractors = findTractors(trumpCards, trumpSuit, trumpLevel);
     const matched = trumpTractors.filter(t => t.length >= leadCards.length);
@@ -462,6 +504,28 @@ function _generateChopCandidatesLastPlayer(trumpCards: Card[], leadCards: Card[]
         evaluateCardValue(a[0], trumpSuit, trumpLevel) - evaluateCardValue(b[0], trumpSuit, trumpLevel)
       );
       candidates.push({ cards: trumpPairs[0], score: chopScore, reason: '对主将吃(末家)' });
+    }
+  } else if (leadPattern.type === 'triple') {
+    const trumpTriples = findTriples(trumpCards);
+    if (trumpTriples.length > 0) {
+      const pointTriples = trumpTriples.filter(t => POINT_CARDS[t[0].rank]);
+      if (pointTriples.length > 0) {
+        pointTriples.sort((a, b) =>
+          (POINT_CARDS[b[0].rank] || 0) - (POINT_CARDS[a[0].rank] || 0)
+        );
+        candidates.push({ cards: pointTriples[0].slice(0, leadCards.length), score: chopScore + 5, reason: '主分三同张将吃(末家)' });
+      }
+      trumpTriples.sort((a, b) =>
+        evaluateCardValue(a[0], trumpSuit, trumpLevel) - evaluateCardValue(b[0], trumpSuit, trumpLevel)
+      );
+      candidates.push({ cards: trumpTriples[0].slice(0, leadCards.length), score: chopScore, reason: '三同张主将吃(末家)' });
+    }
+    const trumpPairs = findPairs(trumpCards);
+    if (trumpPairs.length > 0 && leadCards.length >= 2) {
+      trumpPairs.sort((a, b) =>
+        evaluateCardValue(a[0], trumpSuit, trumpLevel) - evaluateCardValue(b[0], trumpSuit, trumpLevel)
+      );
+      candidates.push({ cards: trumpPairs[0], score: chopScore - 20, reason: '对主部分将吃(末家)' });
     }
   } else if (leadPattern.type === 'tractor') {
     const trumpTractors = findTractors(trumpCards, trumpSuit, trumpLevel);
@@ -535,6 +599,19 @@ function _generateChopCandidatesBiggerThan(trumpCards: Card[], leadCards: Card[]
         break;
       }
     }
+  } else if (leadPattern.type === 'triple') {
+    const trumpTriples = findTriples(trumpCards);
+    const chopperMax = getMaxCard(chopperTrumps, trumpSuit, trumpLevel, 'trump');
+    trumpTriples.sort((a, b) =>
+      evaluateCardValue(a[0], trumpSuit, trumpLevel) - evaluateCardValue(b[0], trumpSuit, trumpLevel)
+    );
+    for (const triple of trumpTriples) {
+      const tripleMax = getMaxCard(triple, trumpSuit, trumpLevel, 'trump');
+      if (compareCards(tripleMax, chopperMax, trumpSuit, trumpLevel, 'trump') > 0) {
+        candidates.push({ cards: triple.slice(0, leadCards.length), score: chopScore, reason: '超三同张将吃' });
+        break;
+      }
+    }
   } else if (leadPattern.type === 'tractor') {
     const trumpTractors = findTractors(trumpCards, trumpSuit, trumpLevel);
     const matched = trumpTractors.filter(t => t.length >= leadCards.length);
@@ -602,6 +679,14 @@ export function selectLeadPlay(hand: Card[], gameState: any, seat: number, team:
   for (const pair of acePairs) {
     const safety = suitSafetyScore(pair[0].suit);
     candidates.push({ cards: pair, score: 120 + safety + handFactor, reason: safety < -10 ? '出副牌A对(对手缺门)' : '出副牌A对' });
+  }
+
+  // 1.5 副牌三同张/四同张（确定大的牌先出）
+  const nonTrumpTriples = findTriples(nonTrumps);
+  const aceTriples = nonTrumpTriples.filter(t => t[0].rank === 'A');
+  for (const triple of aceTriples) {
+    const safety = suitSafetyScore(triple[0].suit);
+    candidates.push({ cards: triple, score: 125 + safety + handFactor, reason: safety < -10 ? '出副牌A三同张(对手缺门)' : '出副牌A三同张' });
   }
 
   // 2. 副牌A单张（最大的单张牌，应优先出）
@@ -701,6 +786,14 @@ export function selectLeadPlay(hand: Card[], gameState: any, seat: number, team:
     } else {
       candidates.push({ cards: pair, score: 75 + safety, reason: '出副牌对子' });
     }
+  }
+
+  // 6.6 其他副牌三同张（非A非K）
+  const otherTriples = nonTrumpTriples.filter(t => t[0].rank !== 'A' && t[0].rank !== 'K');
+  otherTriples.sort((a, b) => RANK_ORDER[b[0].rank] - RANK_ORDER[a[0].rank]);
+  for (const triple of otherTriples.slice(0, 2)) {
+    const safety = suitSafetyScore(triple[0].suit);
+    candidates.push({ cards: triple, score: 80 + safety, reason: '出副牌三同张' });
   }
 
   // 7. 长套副牌甩牌
@@ -836,44 +929,83 @@ function findPairsSimple(cards: Card[]): Card[][] {
 }
 
 /**
- * 从手牌中找出拖拉机（同花色连续对子）
+ * 从手牌中找出所有三同张/四同张
+ */
+function findTriplesSimple(cards: Card[]): Card[][] {
+  const groups: Record<string, Card[]> = {};
+  for (const c of cards) {
+    const key = `${c.suit}_${c.rank}`;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(c);
+  }
+  const triples: Card[][] = [];
+  for (const key in groups) {
+    if (groups[key].length >= 3) {
+      triples.push(groups[key].slice(0, groups[key].length >= 4 ? 4 : 3));
+    }
+  }
+  return triples;
+}
+
+/**
+ * 从手牌中找出拖拉机（同花色连续等量组）
  */
 function findTractorsSimple(cards: Card[], trumpSuit: string | null, trumpLevel: number): Card[][] {
-  const pairs = findPairsSimple(cards);
-  if (pairs.length < 2) return [];
+  const tractors: Card[][] = [];
 
-  // 按花色分组
-  const suitGroups: Record<string, Card[][]> = {};
-  for (const pair of pairs) {
-    const suit = pair[0].suit;
-    if (!suitGroups[suit]) suitGroups[suit] = [];
-    suitGroups[suit].push(pair);
+  // 对子拖拉机
+  const pairs = findPairsSimple(cards);
+  if (pairs.length >= 2) {
+    const suitGroups: Record<string, Card[][]> = {};
+    for (const pair of pairs) {
+      const suit = pair[0].suit;
+      if (!suitGroups[suit]) suitGroups[suit] = [];
+      suitGroups[suit].push(pair);
+    }
+    for (const suit in suitGroups) {
+      const suitPairs = suitGroups[suit];
+      if (suitPairs.length < 2) continue;
+      suitPairs.sort((a, b) => RANK_ORDER[a[0].rank] - RANK_ORDER[b[0].rank]);
+      let current: Card[][] = [suitPairs[0]];
+      for (let i = 1; i < suitPairs.length; i++) {
+        const prevRank = RANK_ORDER[current[current.length - 1][0].rank];
+        const currRank = RANK_ORDER[suitPairs[i][0].rank];
+        if (currRank - prevRank === 1) {
+          current.push(suitPairs[i]);
+        } else {
+          if (current.length >= 2) tractors.push(current.flat());
+          current = [suitPairs[i]];
+        }
+      }
+      if (current.length >= 2) tractors.push(current.flat());
+    }
   }
 
-  const tractors: Card[][] = [];
-  for (const suit in suitGroups) {
-    const suitPairs = suitGroups[suit];
-    if (suitPairs.length < 2) continue;
-
-    // 按rank排序
-    suitPairs.sort((a, b) => RANK_ORDER[a[0].rank] - RANK_ORDER[b[0].rank]);
-
-    // 找连续对子
-    let current: Card[][] = [suitPairs[0]];
-    for (let i = 1; i < suitPairs.length; i++) {
-      const prevRank = RANK_ORDER[current[current.length - 1][0].rank];
-      const currRank = RANK_ORDER[suitPairs[i][0].rank];
-      if (currRank - prevRank === 1) {
-        current.push(suitPairs[i]);
-      } else {
-        if (current.length >= 2) {
-          tractors.push(current.flat());
-        }
-        current = [suitPairs[i]];
-      }
+  // 三同张/四同张拖拉机
+  const triples = findTriplesSimple(cards);
+  if (triples.length >= 2) {
+    const suitGroups: Record<string, Card[][]> = {};
+    for (const triple of triples) {
+      const suit = triple[0].suit;
+      if (!suitGroups[suit]) suitGroups[suit] = [];
+      suitGroups[suit].push(triple);
     }
-    if (current.length >= 2) {
-      tractors.push(current.flat());
+    for (const suit in suitGroups) {
+      const suitTriples = suitGroups[suit];
+      if (suitTriples.length < 2) continue;
+      suitTriples.sort((a, b) => RANK_ORDER[a[0].rank] - RANK_ORDER[b[0].rank]);
+      let current: Card[][] = [suitTriples[0]];
+      for (let i = 1; i < suitTriples.length; i++) {
+        const prevRank = RANK_ORDER[current[current.length - 1][0].rank];
+        const currRank = RANK_ORDER[suitTriples[i][0].rank];
+        if (currRank - prevRank === 1) {
+          current.push(suitTriples[i]);
+        } else {
+          if (current.length >= 2) tractors.push(current.flat());
+          current = [suitTriples[i]];
+        }
+      }
+      if (current.length >= 2) tractors.push(current.flat());
     }
   }
 
@@ -925,8 +1057,8 @@ function ensureCorrectPlayCount(cards: Card[], hand: Card[], leadCards: Card[], 
     evaluateCardValue(b, trumpSuit, trumpLevel)
   );
 
-  // 如果首家出对牌或拖拉机，优先用同花色对牌补齐
-  if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && cards.length < leadCount) {
+  // 如果首家出对牌/三同张/拖拉机，优先用同花色同类型牌补齐
+  if ((leadPattern.type === 'pair' || leadPattern.type === 'triple' || leadPattern.type === 'tractor') && cards.length < leadCount) {
     const result = [...cards];
     // 按rank分组找对子
     const groups: Record<string, Card[]> = {};
@@ -1084,7 +1216,7 @@ function selectTeammateWinningPlay(hand: Card[], leadCards: Card[], sameSuitCard
     );
 
     // 如果首家出对牌/拖拉机，优先跟对牌
-    if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+    if ((leadPattern.type === 'pair' || leadPattern.type === 'triple' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
       const pairs = findPairsSimple(sameSuitCards);
       if (pairs.length > 0) {
         pairs.sort((a, b) =>
@@ -1274,7 +1406,7 @@ function selectTeammateLosingPlay(hand: Card[], leadCards: Card[], sameSuitCards
   }
 
   // 如果首家出对牌或拖拉机，考虑对牌
-  if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+  if ((leadPattern.type === 'pair' || leadPattern.type === 'triple' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
     const pairs = findPairsSimple(sameSuitCards);
     const leadSuit = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel) ? 'trump' : leadCards[0].suit;
     const winnerCards = analysis.currentWinnerCards || leadCards;
@@ -1484,7 +1616,7 @@ function selectOpponentLeadingButTeammateWinningPlay(hand: Card[], leadCards: Ca
     const leadIsTrump = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel);
 
     // 如果首家出对牌，跟最小的对牌
-    if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+    if ((leadPattern.type === 'pair' || leadPattern.type === 'triple' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
       const pairs = findPairsSimple(sameSuitCards);
       if (pairs.length > 0) {
         pairs.sort((a, b) =>
@@ -1643,7 +1775,7 @@ function selectOpponentWinningPlay(hand: Card[], leadCards: Card[], sameSuitCard
   }
 
   // 如果首家出对牌或拖拉机，考虑对牌
-  if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+  if ((leadPattern.type === 'pair' || leadPattern.type === 'triple' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
     const pairs = findPairsSimple(sameSuitCards);
     const leadSuit = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel) ? 'trump' : leadCards[0].suit;
 
@@ -1807,7 +1939,7 @@ function selectDefaultFollowPlay(hand: Card[], leadCards: Card[], sameSuitCards:
     );
 
     // 如果首家出对牌，优先跟对牌
-    if ((leadPattern.type === 'pair' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+    if ((leadPattern.type === 'pair' || leadPattern.type === 'triple' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
       const pairs = findPairsSimple(sameSuitCards);
       if (pairs.length > 0) {
         pairs.sort((a, b) =>

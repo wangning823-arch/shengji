@@ -49,7 +49,7 @@ export interface Levels {
 }
 
 export interface CardPattern {
-  type: 'single' | 'pair' | 'tractor' | 'mix';
+  type: 'single' | 'pair' | 'triple' | 'tractor' | 'mix';
   length: number;
 }
 
@@ -170,28 +170,33 @@ export function groupByRank(cards: Card[]): Record<string, Card[]> {
 }
 
 export function isTractor(cards: Card[], trumpSuit: string | null, trumpLevel: number): boolean {
-  if (cards.length < 4 || cards.length % 2 !== 0) return false;
-  const pairs: { suit: string; rank: string; count: number }[] = [];
+  if (cards.length < 4) return false;
   const grouped = groupByRank(cards);
+  const groups: { suit: string; rank: string; count: number }[] = [];
   for (const key in grouped) {
-    if (grouped[key].length >= 2) {
-      const [suit, rank] = key.split('_');
-      pairs.push({ suit, rank, count: grouped[key].length });
-    }
+    const [suit, rank] = key.split('_');
+    groups.push({ suit, rank, count: grouped[key].length });
   }
-  if (pairs.length < 2) return false;
+  if (groups.length < 2) return false;
 
-  pairs.sort((a, b) => RANK_ORDER[a.rank] - RANK_ORDER[b.rank]);
+  // 所有组的张数必须相同且 >= 2
+  const groupSize = groups[0].count;
+  if (groupSize < 2) return false;
+  if (!groups.every(g => g.count === groupSize)) return false;
+  // 总牌数必须等于 组数 × 每组张数
+  if (cards.length !== groups.length * groupSize) return false;
 
-  const isTrumpPair = (p: { suit: string; rank: string }) => isTrump({ suit: p.suit, rank: p.rank } as Card, trumpSuit, trumpLevel);
+  groups.sort((a, b) => RANK_ORDER[a.rank] - RANK_ORDER[b.rank]);
 
-  for (let i = 1; i < pairs.length; i++) {
-    const prev = pairs[i - 1];
-    const curr = pairs[i];
-    const sameSuit = prev.suit === curr.suit || (isTrumpPair(prev) && isTrumpPair(curr));
+  const isTrumpGroup = (p: { suit: string; rank: string }) => isTrump({ suit: p.suit, rank: p.rank } as Card, trumpSuit, trumpLevel);
+
+  for (let i = 1; i < groups.length; i++) {
+    const prev = groups[i - 1];
+    const curr = groups[i];
+    const sameSuit = prev.suit === curr.suit || (isTrumpGroup(prev) && isTrumpGroup(curr));
     if (!sameSuit) return false;
 
-    if (isTrumpPair(prev) && isTrumpPair(curr)) {
+    if (isTrumpGroup(prev) && isTrumpGroup(curr)) {
       const trumpRanks = [getTrumpRank({ suit: prev.suit, rank: prev.rank } as Card, trumpSuit, trumpLevel),
                           getTrumpRank({ suit: curr.suit, rank: curr.rank } as Card, trumpSuit, trumpLevel)];
       if (Math.abs(trumpRanks[0] - trumpRanks[1]) !== 1) return false;
@@ -216,10 +221,17 @@ export function getCardPattern(cards: Card[], trumpSuit: string | null, trumpLev
   if (cards.length === 1) return { type: 'single', length: 1 };
 
   const grouped = groupByRank(cards);
-  const pairs = Object.values(grouped).filter(g => g.length >= 2);
+  const groups = Object.values(grouped);
 
-  if (cards.length === 2 && pairs.length === 1) return { type: 'pair', length: 2 };
+  // 单一组合：对子/三同张/四同张
+  if (groups.length === 1) {
+    const count = groups[0].length;
+    if (count === 2) return { type: 'pair', length: 2 };
+    if (count === 3) return { type: 'triple', length: 3 };
+    if (count === 4) return { type: 'triple', length: 4 }; // 四同张归为 triple 类型
+  }
 
+  // 拖拉机：等量连续组（对子拖拉机3344、三同张拖拉机333444、四同张拖拉机等）
   if (isTractor(cards, trumpSuit, trumpLevel)) {
     return { type: 'tractor', length: cards.length };
   }
@@ -281,6 +293,38 @@ function canBeatPair(hand: Card[], suit: string, rank: string, isTrumpCard: bool
   }
 }
 
+function canBeatTriple(hand: Card[], suit: string, rank: string, isTrumpCard: boolean, trumpSuit: string | null, trumpLevel: number): boolean {
+  const card = { suit, rank } as Card;
+  const leadSuit = isTrumpCard ? 'trump' : suit;
+
+  const sameSuitCards = hand.filter(c => {
+    if (isTrumpCard) return isTrump(c, trumpSuit, trumpLevel);
+    return !isTrump(c, trumpSuit, trumpLevel) && c.suit === suit;
+  });
+
+  if (sameSuitCards.length >= 3) {
+    const handGrouped = groupByRank(sameSuitCards);
+    for (const key in handGrouped) {
+      if (handGrouped[key].length >= 3) {
+        const c = handGrouped[key][0];
+        if (compareCards(c, card, trumpSuit, trumpLevel, leadSuit) > 0) {
+          return true;
+        }
+      }
+    }
+    return false;
+  } else {
+    const trumpCards = hand.filter(c => isTrump(c, trumpSuit, trumpLevel));
+    const trumpGrouped = groupByRank(trumpCards);
+    for (const key in trumpGrouped) {
+      if (trumpGrouped[key].length >= 3) {
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
 function isDumpGuaranteedMax(dumpCards: Card[], otherPlayers: Player[], trumpSuit: string | null, trumpLevel: number): boolean {
   const grouped = groupByRank(dumpCards);
 
@@ -291,7 +335,11 @@ function isDumpGuaranteedMax(dumpCards: Card[], otherPlayers: Player[], trumpSui
     const isTrumpCard = isTrump(cards[0], trumpSuit, trumpLevel);
 
     for (const player of otherPlayers) {
-      if (cards.length >= 2) {
+      if (cards.length >= 3) {
+        if (canBeatTriple(player.hand, suit, rank, isTrumpCard, trumpSuit, trumpLevel)) {
+          return false;
+        }
+      } else if (cards.length >= 2) {
         if (canBeatPair(player.hand, suit, rank, isTrumpCard, trumpSuit, trumpLevel)) {
           return false;
         }
@@ -312,7 +360,11 @@ function getFallbackFromDump(dumpCards: Card[], trumpSuit: string | null, trumpL
 
   for (const key in grouped) {
     const cards = grouped[key];
-    if (cards.length >= 2) {
+    if (cards.length >= 4) {
+      components.push({ type: 'triple', cards: cards.slice(0, 4) });
+    } else if (cards.length >= 3) {
+      components.push({ type: 'triple', cards: cards.slice(0, 3) });
+    } else if (cards.length >= 2) {
       components.push({ type: 'pair', cards: cards.slice(0, 2) });
     } else {
       components.push({ type: 'single', cards });
@@ -375,6 +427,11 @@ function canFollow(hand: Card[], leadCards: Card[], trumpSuit: string | null, tr
     return isTractor(handInSuit.slice(0, leadPattern.length), trumpSuit, trumpLevel) || handInSuit.length >= leadCards.length;
   }
 
+  if (leadPattern.type === 'triple') {
+    const handTriples = Object.values(handGrouped).filter(g => g.length >= 3);
+    return handTriples.length >= 1 || handInSuit.length >= leadCards.length;
+  }
+
   return true;
 }
 
@@ -426,6 +483,14 @@ export function validatePlay(hand: Card[], playedCards: Card[], leadCards: Card[
     }
   }
 
+  if (leadPattern.type === 'triple' && playedInSuit.length >= 3) {
+    const handTriples = Object.values(groupByRank(handInSuit)).filter(g => g.length >= 3);
+    const playedHasTriple = Object.values(groupByRank(playedInSuit)).some(g => g.length >= 3);
+    if (handTriples.length > 0 && !playedHasTriple) {
+      return { valid: false, reason: '有三同张必须跟三同张' };
+    }
+  }
+
   if (leadPattern.type === 'tractor' && playedInSuit.length >= leadCards.length) {
     const isTractorPlay = isTractor(playedInSuit.slice(0, leadCards.length), trumpSuit, trumpLevel);
     const handCanTractor = isTractor(handInSuit.slice(0, leadCards.length), trumpSuit, trumpLevel);
@@ -433,12 +498,33 @@ export function validatePlay(hand: Card[], playedCards: Card[], leadCards: Card[
       return { valid: false, reason: '有拖拉机必须跟拖拉机' };
     }
 
-    // 没有拖拉机但有对子，必须跟对子
+    // 判断拖拉机的基础张数（2=对子拖拉机, 3=三同张拖拉机, 4=四同张拖拉机）
+    const leadGrouped = groupByRank(leadCards);
+    const leadGroupSize = Math.min(...Object.values(leadGrouped).map(g => g.length));
+
     if (!handCanTractor) {
-      const handPairs = Object.values(groupByRank(handInSuit)).filter(g => g.length >= 2);
-      const playedPairs = Object.values(groupByRank(playedInSuit)).filter(g => g.length >= 2);
-      if (handPairs.length > 0 && playedPairs.length === 0) {
-        return { valid: false, reason: '有对子必须跟对子' };
+      if (leadGroupSize >= 3) {
+        // 三同张/四同张拖拉机：没有同类型拖拉机时，有三同张必须出三同张
+        const handTriples = Object.values(groupByRank(handInSuit)).filter(g => g.length >= leadGroupSize);
+        const playedTriples = Object.values(groupByRank(playedInSuit)).filter(g => g.length >= leadGroupSize);
+        if (handTriples.length > 0 && playedTriples.length === 0) {
+          return { valid: false, reason: '有三同张必须跟三同张' };
+        }
+        // 没有三同张但有对子，必须出对子
+        if (handTriples.length === 0) {
+          const handPairs = Object.values(groupByRank(handInSuit)).filter(g => g.length >= 2);
+          const playedPairs = Object.values(groupByRank(playedInSuit)).filter(g => g.length >= 2);
+          if (handPairs.length > 0 && playedPairs.length === 0) {
+            return { valid: false, reason: '有对子必须跟对子' };
+          }
+        }
+      } else {
+        // 对子拖拉机：没有拖拉机但有对子，必须跟对子
+        const handPairs = Object.values(groupByRank(handInSuit)).filter(g => g.length >= 2);
+        const playedPairs = Object.values(groupByRank(playedInSuit)).filter(g => g.length >= 2);
+        if (handPairs.length > 0 && playedPairs.length === 0) {
+          return { valid: false, reason: '有对子必须跟对子' };
+        }
       }
     }
   }
@@ -493,6 +579,9 @@ export function isPlayBeating(playCards: Card[], winnerCards: Card[], leadCards:
     } else if (leadPattern.type === 'tractor') {
       const trumpPattern = getCardPattern(playTrumps, trumpSuit, trumpLevel);
       playChopped = trumpPattern.type === 'tractor';
+    } else if (leadPattern.type === 'triple') {
+      const trumpPattern = getCardPattern(playTrumps, trumpSuit, trumpLevel);
+      playChopped = trumpPattern.type === 'triple';
     } else {
       playChopped = true; // mix类型，有主牌就算将吃
     }
@@ -506,6 +595,9 @@ export function isPlayBeating(playCards: Card[], winnerCards: Card[], leadCards:
     } else if (leadPattern.type === 'tractor') {
       const trumpPattern = getCardPattern(winnerTrumps, trumpSuit, trumpLevel);
       winnerChopped = trumpPattern.type === 'tractor';
+    } else if (leadPattern.type === 'triple') {
+      const trumpPattern = getCardPattern(winnerTrumps, trumpSuit, trumpLevel);
+      winnerChopped = trumpPattern.type === 'triple';
     } else {
       winnerChopped = true;
     }
@@ -530,8 +622,8 @@ export function isPlayBeating(playCards: Card[], winnerCards: Card[], leadCards:
   // 都跟了花色
   const compareSuit = leadIsTrump ? 'trump' : leadSuit;
 
-  // 对于对子/拖拉机：只有跟了同类型才能赢
-  if (leadPattern.type === 'pair' || leadPattern.type === 'tractor') {
+  // 对于对子/三同张/拖拉机：只有跟了同类型才能赢
+  if (leadPattern.type === 'pair' || leadPattern.type === 'triple' || leadPattern.type === 'tractor') {
     const playPattern = getCardPattern(playInSuit, trumpSuit, trumpLevel);
     const winnerPattern = getCardPattern(winnerInSuit, trumpSuit, trumpLevel);
 

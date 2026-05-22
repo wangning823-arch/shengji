@@ -170,6 +170,8 @@ const App = {
     hand.style.cursor = 'grab';
   },
 
+  // 横屏触摸展开：触摸某张牌时，附近牌临时展开
+  _touchExpandActive: false,
   connect() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     this.ws = new WebSocket(`${protocol}//${location.host}`);
@@ -903,10 +905,101 @@ const App = {
     const container = document.getElementById('my-hand');
     container.innerHTML = '';
 
-    for (const card of this.myHand) {
+    const isLandscape = window.innerWidth > window.innerHeight;
+    const cardCount = this.myHand.length;
+
+    // 按花色排序（主牌在前 → ♠ → ♥ → ♣ → ♦），同花色内按点数降序
+    const sorted = [...this.myHand];
+    const gs = this.gameState;
+    const trumpSuit = gs?.trumpSuit;
+    const trumpLevel = gs?.trumpLevel;
+
+    const suitOrder = trumpSuit
+      ? ['joker', trumpSuit, 'spade', 'heart', 'diamond', 'club'].filter((s, i, a) => a.indexOf(s) === i)
+      : ['joker', 'spade', 'heart', 'diamond', 'club'];
+
+    const isTrump = (c) => {
+      if (c.suit === 'joker') return true;
+      if (c.rank === '2') return true;
+      if (trumpLevel && c.rank === this.getRankFromLevel(trumpLevel)) return true;
+      if (trumpSuit && c.suit === trumpSuit) return true;
+      return false;
+    };
+
+    const getTrumpRank = (c) => {
+      if (c.suit === 'joker') return c.rank === 'big' ? 100 : 99;
+      if (c.rank === this.getRankFromLevel(trumpLevel)) {
+        if (c.suit === trumpSuit) return 98;
+        return 97;
+      }
+      if (c.rank === '2' && this.getRankFromLevel(trumpLevel) !== '2') {
+        if (c.suit === trumpSuit) return 96;
+        return 95;
+      }
+      return this.RANK_ORDER.indexOf(c.rank);
+    };
+
+    sorted.sort((a, b) => {
+      const aT = isTrump(a), bT = isTrump(b);
+      if (aT && !bT) return -1;
+      if (!aT && bT) return 1;
+      if (aT && bT) {
+        const rDiff = getTrumpRank(b) - getTrumpRank(a);
+        if (rDiff !== 0) return rDiff;
+        const sDiff = suitOrder.indexOf(a.suit) - suitOrder.indexOf(b.suit);
+        if (sDiff !== 0) return sDiff;
+        return this.RANK_ORDER.indexOf(b.rank) - this.RANK_ORDER.indexOf(a.rank);
+      }
+      const sDiff = suitOrder.indexOf(a.suit) - suitOrder.indexOf(b.suit);
+      if (sDiff !== 0) return sDiff;
+      return this.RANK_ORDER.indexOf(b.rank) - this.RANK_ORDER.indexOf(a.rank);
+    });
+
+    // 计算动态卡片尺寸
+    const isMobile = document.body.classList.contains('mobile-game');
+    let cardWidth, cardHeight, cardFont, overlapMargin;
+
+    if (isMobile && isLandscape) {
+      // 横屏：单行，固定露出半张牌（21px），左右滑动浏览
+      cardWidth = 42;
+      cardHeight = 56;
+      cardFont = 10;
+      overlapMargin = -21; // 露出半张牌
+    } else if (isMobile && !isLandscape) {
+      // 竖屏：多行，限制4行，动态缩牌
+      const availWidth = window.innerWidth - 16;
+      const maxRows = 4;
+      const baseCardW = 36;
+      const baseCardH = 48;
+      const marginL = -6;
+
+      // 计算每行能放多少张
+      const cardsPerRow = Math.max(1, Math.floor((availWidth - baseCardW) / (baseCardW + marginL)) + 1);
+      const neededRows = Math.ceil(cardCount / cardsPerRow);
+
+      if (neededRows <= maxRows) {
+        cardWidth = baseCardW;
+        cardHeight = baseCardH;
+        cardFont = 9;
+      } else {
+        // 缩牌以适配4行
+        const targetPerRow = Math.ceil(cardCount / maxRows);
+        const neededWidth = targetPerRow * baseCardW + (targetPerRow - 1) * marginL;
+        const scale = Math.min(1, availWidth / neededWidth);
+        cardWidth = Math.max(22, Math.floor(baseCardW * scale));
+        cardHeight = Math.max(30, Math.floor(baseCardH * scale));
+        cardFont = Math.max(7, Math.floor(9 * scale));
+      }
+    }
+
+    // 渲染牌，按花色分组添加间距
+    let prevSuit = null;
+    for (let i = 0; i < sorted.length; i++) {
+      const card = sorted[i];
       const el = document.createElement('div');
       el.className = 'card ' + this.getCardColorClass(card);
       el.dataset.id = card.id;
+      el.dataset.index = i;
 
       const rankDisplay = card.rank === 'small' ? '小王' : card.rank === 'big' ? '大王' : card.rank;
       const suitDisplay = this.SUIT_SYMBOLS[card.suit] || '';
@@ -920,9 +1013,39 @@ const App = {
         el.classList.add('selected');
       }
 
+      // 花色分组间距
+      const cardSuit = isTrump(card) ? 'trump' : card.suit;
+      if (prevSuit !== null && cardSuit !== prevSuit) {
+        el.classList.add('suit-gap');
+      }
+      prevSuit = cardSuit;
+
+      // 动态尺寸（移动端）
+      if (isMobile) {
+        if (isLandscape && overlapMargin !== undefined) {
+          el.style.width = cardWidth + 'px';
+          el.style.height = cardHeight + 'px';
+          el.style.fontSize = cardFont + 'px';
+          // 第一张牌不设 marginLeft，CSS auto margin 处理居中
+          if (i > 0) {
+            el.style.marginLeft = overlapMargin + 'px';
+          }
+        } else if (!isLandscape) {
+          el.style.width = cardWidth + 'px';
+          el.style.height = cardHeight + 'px';
+          el.style.fontSize = cardFont + 'px';
+        }
+      }
+
       el.onclick = () => this.selectCard(card.id);
       container.appendChild(el);
     }
+
+    // 竖屏：限制最大高度
+    if (isMobile && !isLandscape && cardHeight) {
+      container.style.maxHeight = (cardHeight * 4 + 30) + 'px';
+    }
+
   },
 
   getCardColorClass(card) {
@@ -937,7 +1060,11 @@ const App = {
     } else {
       this.selectedCards.add(cardId);
     }
-    this.renderHand();
+    // 只切换视觉状态，不重建 DOM，保留触摸展开状态
+    const cardEl = document.querySelector(`#my-hand .card[data-id="${cardId}"]`);
+    if (cardEl) {
+      cardEl.classList.toggle('selected', this.selectedCards.has(cardId));
+    }
   },
 
   sortHand() {
