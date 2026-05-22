@@ -1131,11 +1131,11 @@ export function selectFollowPlay(hand: Card[], leadCards: Card[], gameState: any
   if (analysis.leadIsTeammate && analysis.winnerIsTeammate) {
     // 情况1：队友出牌且队友正在赢
     // 策略：跟最小的牌，带上分牌（让队友得分）
-    play = selectTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis);
+    play = selectTeammateWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis, seat, cardTracker);
   } else if (analysis.leadIsTeammate && !analysis.winnerIsTeammate) {
     // 情况2：队友出牌但对手在赢
     // 策略：如果能管住对手就出大牌，否则跟最小的
-    play = selectTeammateLosingPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis);
+    play = selectTeammateLosingPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis, cardTracker);
   } else if (!analysis.leadIsTeammate && analysis.winnerIsTeammate) {
     // 情况3：对手出牌但队友在赢
     // 策略：跟最小的牌，不要破坏队友的优势
@@ -1143,7 +1143,7 @@ export function selectFollowPlay(hand: Card[], leadCards: Card[], gameState: any
   } else if (!analysis.leadIsTeammate && !analysis.winnerIsTeammate) {
     // 情况4：对手出牌且对手在赢
     // 策略：如果能管住就出大牌，否则跟最小的
-    play = selectOpponentWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis);
+    play = selectOpponentWinningPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis, cardTracker);
   } else {
     // 默认策略
     play = selectDefaultFollowPlay(hand, leadCards, sameSuitCards, otherCards, gameState, analysis);
@@ -1154,10 +1154,95 @@ export function selectFollowPlay(hand: Card[], leadCards: Card[], gameState: any
 }
 
 /**
+ * 计算末家对手在某花色可能持有的最高分牌（K/10/5）
+ * 按K→10→5优先级检查，返回需要覆盖的最小目标牌
+ * 如果末家不可能有任何分牌，返回null
+ */
+function findMinCardToCoverPoints(
+  leadSuit: string,
+  hand: Card[],
+  currentTrick: TrickPlay[],
+  cardTracker: CardTracker | undefined,
+  gameState: any
+): Card | null {
+  if (!cardTracker || !cardTracker.playedBySuit) return null;
+
+  const deckCount = gameState.deckCount || 2;
+  const trumpSuit = gameState.trumpSuit;
+  const trumpLevel = gameState.trumpLevel;
+  const levelRank = getRankFromLevel(trumpLevel);
+
+  // 收集该花色所有可能的牌
+  const allPossibleCards: { suit: string; rank: string }[] = [];
+  if (leadSuit === 'trump') {
+    for (let d = 0; d < deckCount; d++) {
+      allPossibleCards.push({ suit: 'joker', rank: 'small' });
+      allPossibleCards.push({ suit: 'joker', rank: 'big' });
+      allPossibleCards.push({ suit: 'spade', rank: '2' });
+      allPossibleCards.push({ suit: 'heart', rank: '2' });
+      allPossibleCards.push({ suit: 'diamond', rank: '2' });
+      allPossibleCards.push({ suit: 'club', rank: '2' });
+      allPossibleCards.push({ suit: 'spade', rank: levelRank });
+      allPossibleCards.push({ suit: 'heart', rank: levelRank });
+      allPossibleCards.push({ suit: 'diamond', rank: levelRank });
+      allPossibleCards.push({ suit: 'club', rank: levelRank });
+      if (trumpSuit) {
+        for (const rank of ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']) {
+          if (rank === levelRank) continue;
+          allPossibleCards.push({ suit: trumpSuit, rank });
+        }
+      }
+    }
+  } else {
+    for (let d = 0; d < deckCount; d++) {
+      for (const rank of ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2']) {
+        allPossibleCards.push({ suit: leadSuit, rank });
+      }
+    }
+  }
+
+  // 排除已出牌、手中牌、当前墩已出牌
+  const playedCards = cardTracker.playedBySuit?.[leadSuit] || [];
+  const playedJokers = cardTracker.playedBySuit?.joker || [];
+  const played = leadSuit === 'trump' ? [...playedCards, ...playedJokers] : playedCards;
+  const currentTrickCards = currentTrick.flatMap(p => p.cards);
+
+  const remaining = allPossibleCards.filter(c => {
+    if (hand.some(h => h.suit === c.suit && h.rank === c.rank)) return false;
+    if (currentTrickCards.some(t => t.suit === c.suit && t.rank === c.rank)) return false;
+    if (played.some(p => p.suit === c.suit && p.rank === c.rank)) return false;
+    return true;
+  });
+
+  // 按K→10→5优先级检查末家是否有分牌，返回需要覆盖的目标
+  const pointRanks = ['K', '10', '5'];
+  for (const rank of pointRanks) {
+    if (remaining.some(c => c.rank === rank)) {
+      return { suit: leadSuit === 'trump' ? (trumpSuit || 'spade') : leadSuit, rank } as Card;
+    }
+  }
+  return null;
+}
+
+/**
+ * 从手牌中找到能盖过指定牌的最小牌
+ */
+function findSmallestCardToBeat(target: Card, hand: Card[], trumpSuit: string | null, trumpLevel: number, leadSuit: string): Card | null {
+  const beating = hand.filter(c =>
+    compareCards(c, target, trumpSuit, trumpLevel, leadSuit) > 0
+  );
+  if (beating.length === 0) return null;
+  beating.sort((a, b) =>
+    compareCards(a, b, trumpSuit, trumpLevel, leadSuit)
+  );
+  return beating[0];
+}
+
+/**
  * 情况1：队友出牌且队友正在赢
  * 策略：跟最小的牌，带上分牌
  */
-function selectTeammateWinningPlay(hand: Card[], leadCards: Card[], sameSuitCards: Card[], otherCards: Card[], gameState: any, analysis: Analysis): Card[] {
+function selectTeammateWinningPlay(hand: Card[], leadCards: Card[], sameSuitCards: Card[], otherCards: Card[], gameState: any, analysis: Analysis, seat: number, cardTracker?: CardTracker): Card[] {
   const candidates: Candidate[] = [];
   const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
 
@@ -1286,7 +1371,28 @@ function selectTeammateWinningPlay(hand: Card[], leadCards: Card[], sameSuitCard
         reason: '跟最小牌'
       });
     } else {
-      // 非末家且跟副牌：出最小非分牌（防对手将吃/管住得分）
+      // 非末家且跟副牌
+
+      // 保护队友：用记牌器判断末家是否有分牌需要覆盖
+      const currentTrick = analysis.currentTrick;
+      const leadSeat = currentTrick[0].seat;
+      const lastPlayerSeat = (leadSeat + 3) % 4;
+      const lastPlayerTeam = gameState.players[lastPlayerSeat]?.team;
+      if (lastPlayerTeam !== analysis.myTeam && cardTracker) {
+        const coverTarget = findMinCardToCoverPoints(leadCards[0].suit, hand, currentTrick, cardTracker, gameState);
+        if (coverTarget) {
+          const coverCard = findSmallestCardToBeat(coverTarget, sameSuitCards, gameState.trumpSuit, gameState.trumpLevel, leadCards[0].suit);
+          if (coverCard) {
+            candidates.push({
+              cards: [coverCard],
+              score: 90,
+              reason: '覆盖末家可能的分牌(' + coverTarget.rank + ')'
+            });
+          }
+        }
+      }
+
+      // 默认：出最小非分牌（防对手捡分）
       const nonPointCards = sameSuitCards.filter(c => !POINT_CARDS[c.rank]);
       if (nonPointCards.length > 0) {
         nonPointCards.sort((a, b) =>
@@ -1366,7 +1472,7 @@ function selectTeammateWinningPlay(hand: Card[], leadCards: Card[], sameSuitCard
  * 情况2：队友出牌但对手在赢
  * 策略：如果能管住对手就出大牌，否则跟最小的
  */
-function selectTeammateLosingPlay(hand: Card[], leadCards: Card[], sameSuitCards: Card[], otherCards: Card[], gameState: any, analysis: Analysis): Card[] {
+function selectTeammateLosingPlay(hand: Card[], leadCards: Card[], sameSuitCards: Card[], otherCards: Card[], gameState: any, analysis: Analysis, cardTracker?: CardTracker): Card[] {
   const candidates: Candidate[] = [];
   const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
 
@@ -1496,13 +1602,59 @@ function selectTeammateLosingPlay(hand: Card[], leadCards: Card[], sameSuitCards
             safeWinning.sort((a, b) => b.score - a.score);
             candidates.push(safeWinning[0]);
           } else {
-            winningPlays.sort((a, b) => a.score - b.score);
-            candidates.push(winningPlays[0]);
+            // 只剩分牌能赢，非末家不出分牌（避免被后面的人盖掉送分）
+            if (!analysis.isLastPlayer) {
+              const nonPointWinning = winningPlays.filter(p => !POINT_CARDS[p.cards[0].rank]);
+              if (nonPointWinning.length > 0) {
+                nonPointWinning.sort((a, b) => a.score - b.score);
+                candidates.push(nonPointWinning[0]);
+              }
+              // 只有分牌能赢 → 放弃这墩
+            } else {
+              winningPlays.sort((a, b) => a.score - b.score);
+              candidates.push(winningPlays[0]);
+            }
           }
         } else {
-          // 无好副牌：出最小能赢的牌（A够用就不出大王/小王/级牌），保留大牌保底
-          winningPlays.sort((a, b) => a.score - b.score);
-          candidates.push(winningPlays[0]);
+          // 无好副牌：非末家用记牌器判断末家是否有分牌需要覆盖
+          if (!analysis.isLastPlayer && cardTracker) {
+            const coverTarget = findMinCardToCoverPoints(leadSuit, hand, analysis.currentTrick, cardTracker, gameState);
+            if (coverTarget) {
+              const coverCard = findSmallestCardToBeat(coverTarget, winningPlays.map(p => p.cards[0]), gameState.trumpSuit, gameState.trumpLevel, leadSuit);
+              if (coverCard) {
+                candidates.push({
+                  cards: [coverCard],
+                  score: 89,
+                  reason: '覆盖末家可能的分牌(' + coverTarget.rank + ')'
+                });
+              } else {
+                // 无法覆盖分牌，优先出非分赢牌；只有分牌能赢则放弃
+                const nonPointWinning = winningPlays.filter(p => !POINT_CARDS[p.cards[0].rank]);
+                if (nonPointWinning.length > 0) {
+                  nonPointWinning.sort((a, b) => a.score - b.score);
+                  candidates.push(nonPointWinning[0]);
+                }
+                // 只有分牌能赢 → 放弃这墩
+              }
+            } else {
+              // 末家无分牌，出最小能赢的牌
+              winningPlays.sort((a, b) => a.score - b.score);
+              candidates.push(winningPlays[0]);
+            }
+          } else {
+            // 无记牌器：非末家优先出非分赢牌；只有分牌能赢则放弃
+            if (!analysis.isLastPlayer) {
+              const nonPointWinning = winningPlays.filter(p => !POINT_CARDS[p.cards[0].rank]);
+              if (nonPointWinning.length > 0) {
+                nonPointWinning.sort((a, b) => a.score - b.score);
+                candidates.push(nonPointWinning[0]);
+              }
+              // 只有分牌能赢 → 放弃这墩
+            } else {
+              winningPlays.sort((a, b) => a.score - b.score);
+              candidates.push(winningPlays[0]);
+            }
+          }
         }
       } else {
         // 末家：出最小能赢的牌（节省实力）
@@ -1735,7 +1887,7 @@ function selectOpponentLeadingButTeammateWinningPlay(hand: Card[], leadCards: Ca
  * 情况4：对手出牌且对手在赢
  * 策略：如果能管住就出大牌，否则跟最小的
  */
-function selectOpponentWinningPlay(hand: Card[], leadCards: Card[], sameSuitCards: Card[], otherCards: Card[], gameState: any, analysis: Analysis): Card[] {
+function selectOpponentWinningPlay(hand: Card[], leadCards: Card[], sameSuitCards: Card[], otherCards: Card[], gameState: any, analysis: Analysis, cardTracker?: CardTracker): Card[] {
   const candidates: Candidate[] = [];
   const leadPattern = getCardPattern(leadCards, gameState.trumpSuit, gameState.trumpLevel);
   const winnerCards = analysis.currentWinnerCards || leadCards;
@@ -1863,13 +2015,59 @@ function selectOpponentWinningPlay(hand: Card[], leadCards: Card[], sameSuitCard
             safeWinning.sort((a, b) => b.score - a.score);
             candidates.push(safeWinning[0]);
           } else {
-            winningPlays.sort((a, b) => a.score - b.score);
-            candidates.push(winningPlays[0]);
+            // 只剩分牌能赢，非末家不出分牌（避免被后面的人盖掉送分）
+            if (!analysis.isLastPlayer) {
+              const nonPointWinning = winningPlays.filter(p => !POINT_CARDS[p.cards[0].rank]);
+              if (nonPointWinning.length > 0) {
+                nonPointWinning.sort((a, b) => a.score - b.score);
+                candidates.push(nonPointWinning[0]);
+              }
+              // 只有分牌能赢 → 放弃这墩
+            } else {
+              winningPlays.sort((a, b) => a.score - b.score);
+              candidates.push(winningPlays[0]);
+            }
           }
         } else {
-          // 无好副牌：出最小能赢的牌（A够用就不出大王/小王/级牌），保留大牌保底
-          winningPlays.sort((a, b) => a.score - b.score);
-          candidates.push(winningPlays[0]);
+          // 无好副牌：非末家用记牌器判断末家是否有分牌需要覆盖
+          if (!analysis.isLastPlayer && cardTracker) {
+            const coverTarget = findMinCardToCoverPoints(leadSuit, hand, analysis.currentTrick, cardTracker, gameState);
+            if (coverTarget) {
+              const coverCard = findSmallestCardToBeat(coverTarget, winningPlays.map(p => p.cards[0]), gameState.trumpSuit, gameState.trumpLevel, leadSuit);
+              if (coverCard) {
+                candidates.push({
+                  cards: [coverCard],
+                  score: 89,
+                  reason: '覆盖末家可能的分牌(' + coverTarget.rank + ')'
+                });
+              } else {
+                // 无法覆盖分牌，优先出非分赢牌；只有分牌能赢则放弃
+                const nonPointWinning = winningPlays.filter(p => !POINT_CARDS[p.cards[0].rank]);
+                if (nonPointWinning.length > 0) {
+                  nonPointWinning.sort((a, b) => a.score - b.score);
+                  candidates.push(nonPointWinning[0]);
+                }
+                // 只有分牌能赢 → 放弃这墩
+              }
+            } else {
+              // 末家无分牌，出最小能赢的牌
+              winningPlays.sort((a, b) => a.score - b.score);
+              candidates.push(winningPlays[0]);
+            }
+          } else {
+            // 无记牌器：非末家优先出非分赢牌；只有分牌能赢则放弃
+            if (!analysis.isLastPlayer) {
+              const nonPointWinning = winningPlays.filter(p => !POINT_CARDS[p.cards[0].rank]);
+              if (nonPointWinning.length > 0) {
+                nonPointWinning.sort((a, b) => a.score - b.score);
+                candidates.push(nonPointWinning[0]);
+              }
+              // 只有分牌能赢 → 放弃这墩
+            } else {
+              winningPlays.sort((a, b) => a.score - b.score);
+              candidates.push(winningPlays[0]);
+            }
+          }
         }
       } else {
         // 末家：出最小能赢的牌（节省实力）

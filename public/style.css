@@ -1549,3 +1549,108 @@ body.mobile-game .history-play-seat {
 #rebid-confirm-dialog .btn:hover {
   background: #45a049;
 }
+
+/* 无主确认对话框 */
+#no-bid-confirm-dialog .modal-content {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10000;
+}
+
+#no-bid-confirm-dialog h3 {
+  color: #ff9800;
+  margin-bottom: 15px;
+}
+
+#no-bid-confirm-dialog p {
+  margin: 10px 0;
+  font-size: 14px;
+}
+
+#no-bid-confirm-dialog .countdown {
+  color: #ff6b6b;
+  font-size: 13px;
+  margin-top: 15px;
+}
+
+#no-bid-confirm-dialog .btn {
+  margin-top: 20px;
+  padding: 10px 30px;
+  font-size: 14px;
+  cursor: pointer;
+  border: none;
+  border-radius: 6px;
+  background: #ff9800;
+  color: white;
+  transition: background 0.2s;
+}
+
+#no-bid-confirm-dialog .btn:hover {
+  background: #f57c00;
+}
+
+/* 反主记录模态框 */
+.bid-history-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.bid-history-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 13px;
+}
+
+.bid-history-item:last-child {
+  border-bottom: none;
+}
+
+.bid-history-player {
+  font-weight: bold;
+  min-width: 60px;
+  color: #4fc3f7;
+}
+
+.bid-history-action {
+  color: #f5a623;
+  min-width: 40px;
+}
+
+.bid-history-cards {
+  color: #fff;
+}
+
+.bid-history-suit {
+  color: #81c784;
+}
+
+.bid-history-result {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.bid-history-result.success {
+  background: rgba(76, 175, 80, 0.3);
+  color: #81c784;
+}
+
+.bid-history-result.fail {
+  background: rgba(244, 67, 54, 0.3);
+  color: #ef9a9a;
+}
+
+.bid-history-result.pass {
+  background: rgba(158, 158, 158, 0.3);
+  color: #bdbdbd;
+}
+
+.bid-history-reason {
+  color: #ff8a80;
+  font-size: 12px;
+}

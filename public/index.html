@@ -168,6 +168,7 @@
         <button id="btn-play" class="btn primary hidden">出牌</button>
         <button id="btn-pass" class="btn hidden">过</button>
         <button id="btn-sort" class="btn small">理牌</button>
+        <button id="btn-bid-history" class="btn small hidden">反主记录</button>
       </div>
 
       <!-- 倒计时 -->
@@ -227,6 +228,20 @@
           </div>
         </div>
         <div class="modal-body" id="history-body">
+          <p>暂无记录</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 反主记录弹窗 -->
+    <div id="bid-history-modal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>反主记录</h2>
+          <button id="btn-close-bid-history" class="btn small">关闭</button>
+        </div>
+        <div class="modal-body" id="bid-history-body">
           <p>暂无记录</p>
         </div>
       </div>

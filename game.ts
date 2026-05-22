@@ -775,8 +775,12 @@ export class GameEngine {
       }
 
       const dealer = this.players[this.dealer];
-      dealer.hand.push(...this.bottomCards);
-      this.status = 'taking_bottom';
+      // 如果无人亮主，直接把底牌给庄家并进入扣底阶段
+      // 如果有人亮过主，底牌由 confirmTrump() 分配（反主阶段可能换庄家）
+      if (this.bids.length === 0) {
+        dealer.hand.push(...this.bottomCards);
+        this.status = 'taking_bottom';
+      }
       this.currentSeat = this.dealer;
       return { done: true, hands: this.players.map(p => p.hand.length), bottom: this.bottomCards.length };
     }
@@ -940,15 +944,7 @@ export class GameEngine {
     if (this.status !== 'dealing' && this.status !== 'bidding') return { success: false, reason: '不在亮主阶段' };
     if (seat !== this.currentSeat) return { success: false, reason: '不是当前玩家的回合' };
 
-    // 记录过牌操作
-    const player = this.players[seat];
-    this.bidRecords.push({
-      seat,
-      userId: player.userId,
-      nickname: player.nickname,
-      action: 'pass',
-      result: 'pass'
-    });
+    // 不记录过牌操作
 
     this.currentSeat = (this.currentSeat + 1) % 4;
 

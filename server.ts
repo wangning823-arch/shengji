@@ -81,6 +81,16 @@ interface RebidConfirm {
 }
 const pendingRebidConfirms = new Map<string, RebidConfirm>();
 
+// 无主确认追踪
+interface NoBidConfirm {
+  roomId: string;
+  lastCard: Card;
+  trumpSuit: string | null;
+  confirmed: Set<number>;
+  timeout: NodeJS.Timeout;
+}
+const pendingNoBidConfirms = new Map<string, NoBidConfirm>();
+
 const PORT = process.env.PORT || 3003;
 const rooms = new Map<string, Room>();
 const games = new Map<string, GameEngine>();
@@ -234,6 +244,11 @@ function processDealingRound(roomId: string, game: GameEngine): void {
       }
     }
     if (result.done) {
+      // 发完所有牌，如果有人亮过主则进入反主阶段
+      if (game.bids.length > 0) {
+        processRebidPhase(roomId, game);
+        return;
+      }
       broadcast(roomId, {
         type: 'trump_confirmed',
         trumpSuit: game.trumpSuit,
@@ -394,6 +409,13 @@ async function handleAIDealBid(roomId: string, game: GameEngine, seat: number): 
   if (game.currentSeat !== seat) return;
   if (game.status !== 'dealing' && game.status !== 'bidding') return;
 
+  // 反主阶段：先检查是否有反主资格
+  if (game.bids.length > 0 && !game.canRebid(seat)) {
+    const passResult = game.passBid(seat);
+    handleBidPassResult(roomId, game, passResult);
+    return;
+  }
+
   const gameState = game.toJSON(seat) as GameState;
   const bidCards = await aiPlayer.decideBid(gameState);
 
@@ -431,39 +453,9 @@ function handleBidPassResult(roomId: string, game: GameEngine, passResult: any):
       processRebidPhase(roomId, game);
       return;
     }
-    const confirmResult = game.confirmTrump();
-    broadcast(roomId, {
-      type: 'trump_confirmed',
-      trumpSuit: confirmResult.trumpSuit,
-      trumpLevel: game.trumpLevel,
-      dealer: game.dealer
-    });
-    broadcast(roomId, {
-      type: 'bottom_taken',
-      dealer: game.dealer,
-      bottomCount: confirmResult.bottomCount
-    });
-    broadcast(roomId, {
-      type: 'turn_changed',
-      seat: game.currentSeat,
-      phase: 'taking_bottom'
-    });
-    broadcast(roomId, {
-      type: 'game_state',
-      state: game.toJSON()
-    });
-    const currentRoom = rooms.get(roomId);
-    const dealerPlayer = currentRoom ? currentRoom.players[game.dealer] : null;
-    if (dealerPlayer && dealerPlayer.ws) {
-      send(dealerPlayer.ws, {
-        type: 'game_state',
-        state: game.toJSON(game.dealer)
-      });
-    }
-    const roomAIs = roomAIPlayers.get(roomId) || {};
-    if (roomAIs[game.dealer]) {
-      setTimeout(() => handleAITurn(roomId, game, game.dealer), 500);
-    }
+    // 无人亮主，发送无主确认通知
+    sendNoBidNotification(roomId, game);
+    return;
   } else {
     broadcast(roomId, {
       type: 'turn_changed',
@@ -717,6 +709,134 @@ function completeRebidConfirmation(roomId: string): void {
       state: game.toJSON()
     });
     handleRebidTurn(roomId, game, nextRebidSeat);
+  }
+}
+
+function sendNoBidNotification(roomId: string, game: GameEngine): void {
+  const room = rooms.get(roomId);
+  if (!room) return;
+
+  // 确保底牌已设置
+  if (game.bottomCards.length === 0 && (game as any)._deck.length > 0) {
+    game.bottomCards = (game as any)._deck.slice(-(game as any)._bottomCount);
+    (game as any)._deck = [];
+  }
+
+  if (game.bottomCards.length === 0) return;
+
+  const lastCard = game.bottomCards[game.bottomCards.length - 1];
+  const trumpSuit = lastCard.suit === 'joker' ? null : lastCard.suit;
+
+  // 清除之前的确认（如果有）
+  const existingConfirm = pendingNoBidConfirms.get(roomId);
+  if (existingConfirm) {
+    clearTimeout(existingConfirm.timeout);
+    pendingNoBidConfirms.delete(roomId);
+  }
+
+  // 创建新的确认追踪
+  const confirm: NoBidConfirm = {
+    roomId,
+    lastCard,
+    trumpSuit,
+    confirmed: new Set(),
+    timeout: setTimeout(() => {
+      // 30秒超时，自动确认
+      console.log(`[NO_BID] Room ${roomId} no-bid confirmation timeout, auto-confirming`);
+      completeNoBidConfirmation(roomId);
+    }, 30000)
+  };
+
+  pendingNoBidConfirms.set(roomId, confirm);
+
+  // 广播无主确认通知
+  broadcast(roomId, {
+    type: 'no_bid_notification',
+    lastCard,
+    trumpSuit,
+    timeout: 30
+  });
+
+  // 自动确认AI玩家
+  const roomAIs = roomAIPlayers.get(roomId) || {};
+  for (let i = 0; i < 4; i++) {
+    if (roomAIs[i]) {
+      // AI玩家自动确认（延迟一小段时间模拟思考）
+      setTimeout(() => {
+        confirmNoBid(roomId, i);
+      }, 500 + Math.random() * 1000);
+    }
+  }
+}
+
+function confirmNoBid(roomId: string, seat: number): void {
+  const confirm = pendingNoBidConfirms.get(roomId);
+  if (!confirm) return;
+
+  confirm.confirmed.add(seat);
+  console.log(`[NO_BID] Room ${roomId} player ${seat} confirmed, total: ${confirm.confirmed.size}/4`);
+
+  // 广播确认状态
+  broadcast(roomId, {
+    type: 'no_bid_confirmed',
+    seat,
+    confirmedCount: confirm.confirmed.size,
+    totalCount: 4
+  });
+
+  // 检查是否所有人都确认了
+  if (confirm.confirmed.size >= 4) {
+    completeNoBidConfirmation(roomId);
+  }
+}
+
+function completeNoBidConfirmation(roomId: string): void {
+  const confirm = pendingNoBidConfirms.get(roomId);
+  if (!confirm) return;
+
+  clearTimeout(confirm.timeout);
+  pendingNoBidConfirms.delete(roomId);
+
+  const room = rooms.get(roomId);
+  if (!room || !room.gameId) return;
+  const game = games.get(room.gameId);
+  if (!game) return;
+
+  // 确认主牌
+  const confirmResult = game.confirmTrump();
+  broadcast(roomId, {
+    type: 'trump_confirmed',
+    trumpSuit: confirmResult.trumpSuit,
+    trumpLevel: game.trumpLevel,
+    dealer: game.dealer
+  });
+  broadcast(roomId, {
+    type: 'bottom_taken',
+    dealer: game.dealer,
+    bottomCount: confirmResult.bottomCount
+  });
+  broadcast(roomId, {
+    type: 'turn_changed',
+    seat: game.currentSeat,
+    phase: 'taking_bottom'
+  });
+  broadcast(roomId, {
+    type: 'game_state',
+    state: game.toJSON()
+  });
+
+  const currentRoom = rooms.get(roomId);
+  const dealerPlayer = currentRoom ? currentRoom.players[game.dealer] : null;
+  if (dealerPlayer && dealerPlayer.ws) {
+    send(dealerPlayer.ws, {
+      type: 'game_state',
+      state: game.toJSON(game.dealer)
+    });
+  }
+
+  const roomAIs = roomAIPlayers.get(roomId) || {};
+  if (roomAIs[game.dealer]) {
+    setTimeout(() => handleAITurn(roomId, game, game.dealer), 500);
   }
 }
 
@@ -1614,6 +1734,15 @@ const messageHandlers: MessageHandlers = {
 
     // 确认反主通知
     confirmRebid(ws.roomId, ws.seat);
+  },
+
+  confirm_no_bid(ws, msg) {
+    if (!ws.roomId) return;
+    const confirm = pendingNoBidConfirms.get(ws.roomId);
+    if (!confirm) return;
+
+    // 确认无主通知
+    confirmNoBid(ws.roomId, ws.seat);
   },
 
   set_bottom(ws, msg) {

@@ -306,6 +306,9 @@ const App = {
 
     document.getElementById('btn-view-bottom').onclick = () => this.showBottomCards();
     document.getElementById('btn-close-bottom').onclick = () => this.hideBottomCards();
+
+    document.getElementById('btn-bid-history').onclick = () => this.showBidHistory();
+    document.getElementById('btn-close-bid-history').onclick = () => this.hideBidHistory();
   },
 
   async loginGuest() {
@@ -542,6 +545,14 @@ const App = {
 
       case 'rebid_confirmed':
         this.updateRebidConfirmation(msg);
+        break;
+
+      case 'no_bid_notification':
+        this.showNoBidNotification(msg);
+        break;
+
+      case 'no_bid_confirmed':
+        this.updateNoBidConfirmation(msg);
         break;
 
       case 'bid_made':
@@ -810,6 +821,11 @@ const App = {
       }
     });
 
+    // 显示反主记录按钮（如果有亮主记录）
+    if (gs.bidRecords && gs.bidRecords.length > 0) {
+      document.getElementById('btn-bid-history').classList.remove('hidden');
+    }
+
     // 更新亮主/反主按钮状态（手牌可能已更新）
     if (gs.status === 'dealing' || gs.status === 'bidding') {
       const isMyTurn = gs.currentSeat === this.seat;
@@ -819,7 +835,7 @@ const App = {
         document.getElementById('btn-bid').classList.toggle('hidden', !canRebidNow);
         document.getElementById('btn-bid').textContent = '反主';
         document.getElementById('btn-pass').classList.add('hidden');
-        document.getElementById('btn-pass-rebid').classList.toggle('hidden', !isMyTurn);
+        document.getElementById('btn-pass-rebid').classList.toggle('hidden', !canRebidNow);
       } else {
         const canBidNow = isMyTurn && this.canBid();
         document.getElementById('btn-bid').classList.toggle('hidden', !canBidNow);
@@ -862,7 +878,7 @@ const App = {
         const canRebidNow = isMyTurn && this.canRebid();
         document.getElementById('btn-bid').classList.toggle('hidden', !canRebidNow);
         document.getElementById('btn-bid').textContent = '反主';
-        document.getElementById('btn-pass-rebid').classList.toggle('hidden', !isMyTurn);
+        document.getElementById('btn-pass-rebid').classList.toggle('hidden', !canRebidNow);
         document.getElementById('btn-pass').classList.add('hidden');
       } else {
         // 亮主阶段
@@ -1154,6 +1170,11 @@ const App = {
       return false;
     }
 
+    // 检查该玩家是否已经出过价（每人最多只能亮主/反主一次）
+    if (this.gameState.bids.some(b => b.seat === this.seat)) {
+      return false;
+    }
+
     const levelCards = this.myHand.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
     const jokerCards = this.myHand.filter(c => c.suit === 'joker');
 
@@ -1296,6 +1317,74 @@ const App = {
     const { seat, confirmedCount, totalCount } = msg;
     // 可以在这里更新确认进度显示
     console.log(`Rebid confirmed: ${confirmedCount}/${totalCount}`);
+  },
+
+  showNoBidNotification(msg) {
+    const { lastCard, trumpSuit, timeout } = msg;
+    const SUIT_NAMES = { spade: '黑桃', heart: '红心', diamond: '方块', club: '梅花' };
+    const RANK_NAMES = { small: '小王', big: '大王', '3': '3', '4': '4', '5': '5', '6': '6', '7': '7', '8': '8', '9': '9', '10': '10', J: 'J', Q: 'Q', K: 'K', A: 'A', '2': '2' };
+
+    // 构建最后一张牌的显示文本
+    let cardName;
+    if (lastCard.suit === 'joker') {
+      cardName = RANK_NAMES[lastCard.rank] || lastCard.rank;
+    } else {
+      cardName = (SUIT_NAMES[lastCard.suit] || '') + (RANK_NAMES[lastCard.rank] || lastCard.rank);
+    }
+
+    const suitName = trumpSuit ? SUIT_NAMES[trumpSuit] : '无主';
+    const message = `无人亮主，最后一张牌是 ${cardName}，主牌为 ${suitName}`;
+
+    // 创建确认对话框
+    const dialog = document.createElement('div');
+    dialog.id = 'no-bid-confirm-dialog';
+    dialog.className = 'modal-overlay';
+    dialog.innerHTML = `
+      <div class="modal-content">
+        <h3>无人亮主</h3>
+        <p>${message}</p>
+        <p class="countdown">将在 <span id="no-bid-countdown">${timeout}</span> 秒后自动确认</p>
+        <button id="btn-confirm-no-bid" class="btn btn-primary">确认</button>
+      </div>
+    `;
+    document.body.appendChild(dialog);
+
+    // 绑定确认按钮
+    document.getElementById('btn-confirm-no-bid').addEventListener('click', () => {
+      this.confirmNoBid();
+    });
+
+    // 倒计时
+    let countdown = timeout;
+    this._noBidCountdownInterval = setInterval(() => {
+      countdown--;
+      const countdownEl = document.getElementById('no-bid-countdown');
+      if (countdownEl) countdownEl.textContent = countdown;
+      if (countdown <= 0) {
+        this.removeNoBidDialog();
+      }
+    }, 1000);
+  },
+
+  confirmNoBid() {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'confirm_no_bid' }));
+    }
+    this.removeNoBidDialog();
+  },
+
+  removeNoBidDialog() {
+    if (this._noBidCountdownInterval) {
+      clearInterval(this._noBidCountdownInterval);
+      this._noBidCountdownInterval = null;
+    }
+    const dialog = document.getElementById('no-bid-confirm-dialog');
+    if (dialog) dialog.remove();
+  },
+
+  updateNoBidConfirmation(msg) {
+    const { seat, confirmedCount, totalCount } = msg;
+    console.log(`No-bid confirmed: ${confirmedCount}/${totalCount}`);
   },
 
   setBottom() {
@@ -1689,6 +1778,54 @@ const App = {
 
   hideBottomCards() {
     document.getElementById('bottom-modal').classList.add('hidden');
+  },
+
+  showBidHistory() {
+    const modal = document.getElementById('bid-history-modal');
+    const body = document.getElementById('bid-history-body');
+    modal.classList.remove('hidden');
+
+    if (!this.gameState || !this.gameState.bidRecords || this.gameState.bidRecords.length === 0) {
+      body.innerHTML = '<p>暂无亮主/反主记录</p>';
+      return;
+    }
+
+    const SUIT_NAMES = { spade: '黑桃', heart: '红心', diamond: '方块', club: '梅花' };
+    const RANK_NAMES = { small: '小王', big: '大王', '3': '3', '4': '4', '5': '5', '6': '6', '7': '7', '8': '8', '9': '9', '10': '10', J: 'J', Q: 'Q', K: 'K', A: 'A', '2': '2' };
+
+    let html = '<div class="bid-history-list">';
+
+    for (const record of this.gameState.bidRecords) {
+      if (record.action === 'pass') continue; // 跳过过牌记录
+      const player = this.getPlayerName(record.seat);
+      const action = record.action === 'bid' ? '亮主' : '反主';
+      const result = record.result === 'success' ? '成功' : '失败';
+
+      const cardNames = (record.cards || []).map(c => {
+        if (c.suit === 'joker') return RANK_NAMES[c.rank] || c.rank;
+        return (SUIT_NAMES[c.suit] || '') + (RANK_NAMES[c.rank] || c.rank);
+      }).join('');
+
+      const suitName = record.trumpSuit ? SUIT_NAMES[record.trumpSuit] : '无主';
+
+      html += '<div class="bid-history-item">';
+      html += `<span class="bid-history-player">${player}</span>`;
+      html += `<span class="bid-history-action">${action}</span>`;
+      html += `<span class="bid-history-cards">${cardNames}</span>`;
+      html += `<span class="bid-history-suit">→ ${suitName}</span>`;
+      html += `<span class="bid-history-result ${record.result}">${result}</span>`;
+      if (record.reason) {
+        html += `<span class="bid-history-reason">(${record.reason})</span>`;
+      }
+      html += '</div>';
+    }
+
+    html += '</div>';
+    body.innerHTML = html;
+  },
+
+  hideBidHistory() {
+    document.getElementById('bid-history-modal').classList.add('hidden');
   }
 };
 
