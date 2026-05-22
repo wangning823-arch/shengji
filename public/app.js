@@ -16,6 +16,7 @@ const App = {
   SUIT_NAMES: { spade: '黑桃', heart: '红桃', diamond: '方块', club: '梅花' },
   RANK_ORDER: ['3','4','5','6','7','8','9','10','J','Q','K','A','2'],
   localCurrentTrick: [],
+  currentWinnerSeat: null,
   playedHistory: [],
   historyViewMode: 'all', // 'all' | 'rounds'
   rebidPhase: false,
@@ -486,11 +487,11 @@ const App = {
         this.rebidPhase = false;
         this.myHand = msg.hand || [];
         this.localCurrentTrick = [];
+        this.currentWinnerSeat = null;
         this.playedHistory = msg.state?.tricks || [];
         this.bottomCards = [];
         this.gameState = msg.state;
         this.clearTrickArea();
-        document.getElementById('trick-winner').textContent = '';
         document.getElementById('game-result-overlay').classList.add('hidden');
         // 保存游戏信息用于重连
         if (msg.seat !== undefined) {
@@ -590,6 +591,7 @@ const App = {
         // 新一轮首张牌：清空出牌区
         if (this.localCurrentTrick.length === 0) {
           this.clearTrickArea();
+          this.currentWinnerSeat = null;
         }
         // 如果上一轮延时清空还没执行，强制清空后重新开始
         if (this._trickClearTimer) {
@@ -599,10 +601,14 @@ const App = {
           this.localCurrentTrick = [];
         }
         this.localCurrentTrick.push({ seat: msg.seat, cards: msg.cards });
+        if (msg.currentWinnerSeat != null && this.localCurrentTrick.length < 4) {
+          this.currentWinnerSeat = msg.currentWinnerSeat;
+        }
         this.renderTrick();
         break;
 
       case 'trick_ended':
+        this.currentWinnerSeat = null;
         // 只有闲家赢且有得分时才显示分数提示，庄家赢不显示
         if (msg.points > 0 && this.gameState) {
           const dealerSeat = this.gameState.dealer;
@@ -630,6 +636,7 @@ const App = {
 
       case 'game_ended':
         this.rebidPhase = false;
+        this.currentWinnerSeat = null;
         console.log(`[GAME_ENDED] idleScore=${msg.idleScore} scores=${JSON.stringify(msg.scores)} dealerTeam=${msg.dealerTeam} winner=${msg.winner}`);
         // 取消 trick 清空定时器，让最后一轮出牌保持可见
         if (this._trickClearTimer) {
@@ -1428,14 +1435,16 @@ const App = {
       const container = document.querySelector(`.trick-seat[data-rel="${relSeat}"]`);
       if (!container) continue;
       container.innerHTML = '';
+      const isWinner = play.seat === this.currentWinnerSeat && this.localCurrentTrick.length < 4;
       for (const card of play.cards) {
         const el = document.createElement('div');
-        el.className = 'card ' + this.getCardColorClass(card);
+        el.className = 'card ' + this.getCardColorClass(card) + (isWinner ? ' trick-leading' : '');
         const rankDisplay = card.rank === 'small' ? '小王' : card.rank === 'big' ? '大王' : card.rank;
         const suitDisplay = this.SUIT_SYMBOLS[card.suit] || '';
         el.innerHTML = `
           <div class="suit-top">${rankDisplay}<br>${suitDisplay}</div>
           <div class="suit-bottom">${rankDisplay}<br>${suitDisplay}</div>
+          ${isWinner ? '<span class="trick-leading-badge">大</span>' : ''}
         `;
         container.appendChild(el);
       }

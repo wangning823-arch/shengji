@@ -1126,7 +1126,7 @@ export class GameEngine {
     return { success: true };
   }
 
-  play(seat: number, cardIds: string[]): { success: boolean; reason?: string; trickEnded?: boolean; winnerSeat?: number; winnerTeam?: number; points?: number; scores?: Scores; nextSeat?: number; playedCards?: Card[]; gameEnded?: boolean; idleScore?: number; dealerTeam?: number; winner?: string; levels?: Levels; nextDealer?: number; nextTrumpLevel?: number; bottomPoints?: number; bottomMultiplier?: number; steps?: UpgradeSteps; step?: number } {
+  play(seat: number, cardIds: string[]): { success: boolean; reason?: string; trickEnded?: boolean; winnerSeat?: number; winnerTeam?: number; points?: number; scores?: Scores; nextSeat?: number; playedCards?: Card[]; currentWinnerSeat?: number; gameEnded?: boolean; idleScore?: number; dealerTeam?: number; winner?: string; levels?: Levels; nextDealer?: number; nextTrumpLevel?: number; bottomPoints?: number; bottomMultiplier?: number; steps?: UpgradeSteps; step?: number } {
     if (this.status !== 'playing') return { success: false, reason: '不在出牌阶段' };
     if (seat !== this.currentSeat) return { success: false, reason: '还没轮到你' };
 
@@ -1207,7 +1207,12 @@ export class GameEngine {
     }
 
     this.currentSeat = (this.currentSeat + 1) % 4;
-    return { success: true, nextSeat: this.currentSeat, playedCards: cards };
+
+    const leadSuit = this.currentTrick[0].cards[0].suit;
+    const winnerIdx = findWinningCard(this.currentTrick, this.trumpSuit, this.trumpLevel, leadSuit);
+    const currentWinnerSeat = this.currentTrick[winnerIdx].seat;
+
+    return { success: true, nextSeat: this.currentSeat, playedCards: cards, currentWinnerSeat };
   }
 
   endRound(): { success: boolean; gameEnded: true; idleScore: number; dealerTeam: number; winner: string; scores: Scores; levels: Levels; nextDealer: number; nextTrumpLevel: number; bottomPoints: number; bottomMultiplier: number; steps: UpgradeSteps; step: number } {

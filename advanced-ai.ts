@@ -34,6 +34,9 @@ interface Analysis {
   trumpLevel: number;
   bottomCardPoints: number;
   bottomProtection: number;
+  trumpCount: number;        // 手牌中主牌数量
+  trumpReserve: number;      // 需要保留的主牌数（保底用）
+  bottomCapture: boolean;    // 闲家扣底意图
   currentTrick: TrickPlay[];
   leadIsTeammate?: boolean;
   isLastPlayer?: boolean;
@@ -230,11 +233,19 @@ export function analyzeGameState(hand: Card[], gameState: any, seat: number, tea
     // 保底相关
     bottomCardPoints: 0,
     bottomProtection: 0,  // 0=无需保护, 1=中等保护, 2=强保护
+    trumpCount: 0,
+    trumpReserve: 0,
+    bottomCapture: false,
     currentTrick: [],
     trickPoints: 0,
     trickPointCards: [],
     opponentTrickPoints: 0
   };
+
+  // 统计手牌中主牌数量
+  const ts = gameState.trumpSuit;
+  const tl = gameState.trumpLevel;
+  analysis.trumpCount = hand.filter(c => isTrump(c, ts, tl)).length;
 
   // 计算保底保护等级
   const isMyTeamDealer = analysis.myTeam === analysis.dealerTeam;
@@ -247,9 +258,13 @@ export function analyzeGameState(hand: Card[], gameState: any, seat: number, tea
       analysis.bottomCardPoints = gameState.bottomCards.reduce((sum: number, c: Card) => sum + (POINT_CARDS[c.rank] || 0), 0);
     }
     const bp = analysis.bottomCardPoints;
-    if (isEndgame && bp >= 30) analysis.bottomProtection = 2;
+    // 庄家保底：底牌有分时更早触发保护
+    if (bp >= 40 && tricksRemaining <= 6) analysis.bottomProtection = 2;
+    else if (bp >= 25 && tricksRemaining <= 4) analysis.bottomProtection = 2;
     else if (isEndgame && bp >= 15) analysis.bottomProtection = 1;
     else if (bp >= 40) analysis.bottomProtection = 1;
+    // 庄家需要保留的主牌数：底牌分越多，需要保留越多
+    analysis.trumpReserve = bp >= 40 ? 3 : (bp >= 25 ? 2 : (bp >= 15 ? 1 : 0));
   } else {
     // 闲家方：根据已出牌估算底牌分值
     const remainingPoints = analysis.bottomPoints;
@@ -260,6 +275,10 @@ export function analyzeGameState(hand: Card[], gameState: any, seat: number, tea
     const estimatedBottomPoints = remainingPoints - estimatedHandPoints;
     if (isEndgame && estimatedBottomPoints >= 25) analysis.bottomProtection = 2;
     else if (isEndgame && estimatedBottomPoints >= 10) analysis.bottomProtection = 1;
+    // 闲家扣底意图：最后几墩，有大主牌可以抢底
+    if (tricksRemaining <= 3 && analysis.trumpCount >= 2) {
+      analysis.bottomCapture = true;
+    }
   }
 
   // 判断是否是队友的回合
@@ -849,31 +868,59 @@ export function selectLeadPlay(hand: Card[], gameState: any, seat: number, team:
       // 不出小主牌
     } else {
       let trumpClearScore = 70;
-      // 闲家方有强保底需求时，降低小主牌出牌意愿（保留大牌抢底）
-      if (!isMyTeamDealer2 && analysis.bottomProtection >= 2) {
-        trumpClearScore = 35;
+      if (isMyTeamDealer2) {
+        // 庄家保底：主牌数量接近保留线时，大幅降低出主意愿
+        if (analysis.bottomProtection >= 2 && analysis.trumpCount <= analysis.trumpReserve + 2) {
+          trumpClearScore = 10; // 几乎不出主，保留主牌保底
+        } else if (analysis.bottomProtection >= 1 && analysis.trumpCount <= analysis.trumpReserve + 1) {
+          trumpClearScore = 25;
+        }
+      } else {
+        // 闲家方有强保底需求时，降低小主牌出牌意愿（保留大牌抢底）
+        if (analysis.bottomProtection >= 2) {
+          trumpClearScore = 35;
+        }
       }
       candidates.push({ cards: [smallTrumps[0]], score: trumpClearScore, reason: '出小主牌清主' });
     }
   }
 
-  // 9.5 小王 — 小王保底概率低，不需要特意保留，可以积极用于清主
+  // 9.5 小王
   const smallJokers = trumps.filter(c => c.suit === 'joker' && c.rank === 'small');
   if (smallJokers.length > 0) {
     let smallJokerScore = 70;
     if (analysis.bottomProtection >= 2) {
-      smallJokerScore = isMyTeamDealer2 ? 75 : 35;
+      smallJokerScore = isMyTeamDealer2 ? 20 : 35; // 庄家保留小王保底，闲家降低出牌意愿
     } else if (analysis.bottomProtection >= 1) {
-      smallJokerScore = isMyTeamDealer2 ? 70 : 45;
+      smallJokerScore = isMyTeamDealer2 ? 40 : 45;
+    }
+    // 闲家扣底：最后几墩提升小王出牌意愿
+    if (!isMyTeamDealer2 && analysis.bottomCapture) {
+      smallJokerScore = Math.max(smallJokerScore, 65);
     }
     candidates.push({ cards: [smallJokers[0]], score: smallJokerScore, reason: analysis.bottomProtection > 0 ? '小王保底' : '出小王清主' });
   }
 
-  // 10. 主牌对子/拖拉机（排除包含大王的）— 对子比单张清主更高效
+  // 9.6 主牌拖拉机（排除包含大王的）— 拖拉机比对子清主更高效
+  const trumpTractors = findTractors(trumps, ts, tl).filter(t => !t.some(c => c.suit === 'joker' && c.rank === 'big'));
+  if (trumpTractors.length > 0) {
+    trumpTractors.sort((a, b) => b.length - a.length);
+    let trumpTractorScore = 85;
+    if (isMyTeamDealer2 && analysis.bottomProtection >= 2 && analysis.trumpCount <= analysis.trumpReserve + 3) {
+      trumpTractorScore = 15; // 庄家保底：不出主牌拖拉机
+    }
+    candidates.push({ cards: trumpTractors[0], score: trumpTractorScore, reason: '出主牌拖拉机' });
+  }
+
+  // 10. 主牌对子（排除包含大王的，排除已组成拖拉机的）— 对子比单张清主更高效
   const trumpPairs = findPairs(trumps).filter(p => !p.some(c => c.suit === 'joker' && c.rank === 'big'));
   for (const pair of trumpPairs) {
     const val = evaluateCardValue(pair[0], ts, tl);
     let trumpPairScore = 80 + (val >= 90 ? 5 : 0);
+    // 庄家保底：主牌对子也降低出牌意愿
+    if (isMyTeamDealer2 && analysis.bottomProtection >= 2 && analysis.trumpCount <= analysis.trumpReserve + 3) {
+      trumpPairScore = 15;
+    }
     // 有分对在对手缺门花色时，提升主对优先级（先清主对，保护分对）
     if (hasScoringPairInVoidSuit && opponentsLikelyHaveTrumpPairs) {
       trumpPairScore = 100;
@@ -881,16 +928,29 @@ export function selectLeadPlay(hand: Card[], gameState: any, seat: number, team:
     candidates.push({ cards: pair, score: trumpPairScore, reason: '出主牌对子' });
   }
 
-  // 11. 大王 — 保底意识：底分多时提升出牌意愿
+  // 11. 大王 — 庄家保留保底，闲家出牌抢底
   const bigJokers = hand.filter(c => c.suit === 'joker' && c.rank === 'big');
   if (bigJokers.length > 0) {
     let bigJokerScore = 20;
-    if (analysis.bottomProtection >= 2) {
-      bigJokerScore = 75; // 强保护：底分多，大王出牌抢赢
-    } else if (analysis.bottomProtection >= 1) {
-      bigJokerScore = 45; // 中等保护
+    if (isMyTeamDealer2) {
+      // 庄家：大王是保底核心，底牌有分时坚决保留
+      if (analysis.bottomProtection >= 2) {
+        bigJokerScore = 5; // 强保护：绝不出大王
+      } else if (analysis.bottomProtection >= 1) {
+        bigJokerScore = 15; // 中等保护：尽量保留
+      }
+    } else {
+      // 闲家：大王出牌抢赢，为扣底做准备
+      if (analysis.bottomProtection >= 2) {
+        bigJokerScore = 85; // 强扣底：大王出牌抢赢
+      } else if (analysis.bottomProtection >= 1) {
+        bigJokerScore = 55;
+      }
+      if (analysis.bottomCapture) {
+        bigJokerScore = Math.max(bigJokerScore, 80);
+      }
     }
-    candidates.push({ cards: [bigJokers[0]], score: bigJokerScore, reason: analysis.bottomProtection > 0 ? '大王保底出牌' : '大王保底不出' });
+    candidates.push({ cards: [bigJokers[0]], score: bigJokerScore, reason: isMyTeamDealer2 && analysis.bottomProtection > 0 ? '大王保底保留' : '大王出牌' });
   }
 
   // 选择最佳候选
@@ -1300,8 +1360,8 @@ function selectTeammateWinningPlay(hand: Card[], leadCards: Card[], sameSuitCard
       evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
     );
 
-    // 如果首家出对牌/拖拉机，优先跟对牌
-    if ((leadPattern.type === 'pair' || leadPattern.type === 'triple' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+    // 如果首家出对牌，优先跟对牌（拖拉机需单独处理，不要拆成对子）
+    if ((leadPattern.type === 'pair' || leadPattern.type === 'triple') && sameSuitCards.length >= 2) {
       const pairs = findPairsSimple(sameSuitCards);
       if (pairs.length > 0) {
         pairs.sort((a, b) =>
@@ -1511,8 +1571,8 @@ function selectTeammateLosingPlay(hand: Card[], leadCards: Card[], sameSuitCards
     }
   }
 
-  // 如果首家出对牌或拖拉机，考虑对牌
-  if ((leadPattern.type === 'pair' || leadPattern.type === 'triple' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+  // 如果首家出对牌，考虑对牌（拖拉机已在上方处理，不要拆成对子）
+  if ((leadPattern.type === 'pair' || leadPattern.type === 'triple') && sameSuitCards.length >= 2) {
     const pairs = findPairsSimple(sameSuitCards);
     const leadSuit = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel) ? 'trump' : leadCards[0].suit;
     const winnerCards = analysis.currentWinnerCards || leadCards;
@@ -1582,6 +1642,18 @@ function selectTeammateLosingPlay(hand: Card[], leadCards: Card[], sameSuitCards
     }
 
     if (winningPlays.length > 0) {
+      // 闲家扣底：最后几墩有扣底意图时，更积极地赢牌
+      if (analysis.bottomCapture && !analysis.isDealer) {
+        const bigTrumpWins = winningPlays.filter(p => {
+          const c = p.cards[0];
+          return c.suit === 'joker' || c.rank === getRankFromLevel(gameState.trumpLevel) || c.rank === 'A' || c.rank === '2';
+        });
+        if (bigTrumpWins.length > 0 && analysis.tricksRemaining <= 2) {
+          bigTrumpWins.sort((a, b) => b.score - a.score);
+          candidates.push({ ...bigTrumpWins[0], score: 90, reason: '扣底：大主牌抢赢' });
+        }
+      }
+
       // 跟主牌且非末家：评估是否有好副牌值得抢出牌权
       if (leadIsTrump && !analysis.isLastPlayer) {
         // 检查是否有好副牌（A/拖拉机/大对子）值得抢出牌权后出牌
@@ -1664,18 +1736,19 @@ function selectTeammateLosingPlay(hand: Card[], leadCards: Card[], sameSuitCards
     }
 
     if (losingPlays.length > 0) {
-      // 跟主牌且非末家：优先不出分牌（10/K），避免送给对手分数
-      if (leadIsTrump && !analysis.isLastPlayer) {
-        const nonPointLosing = losingPlays.filter(p => !POINT_CARDS[p.cards[0].rank]);
-        if (nonPointLosing.length > 0) {
-          nonPointLosing.sort((a, b) => a.score - b.score);
-          candidates.push(nonPointLosing[0]);
-        } else {
-          losingPlays.sort((a, b) => a.score - b.score);
-          candidates.push(losingPlays[0]);
-        }
+      // 无法赢时：排除分牌和高价值牌（大王/小王/级牌），出最小的普通牌
+      const cheapLosing = losingPlays.filter(p => {
+        const c = p.cards[0];
+        if (POINT_CARDS[c.rank]) return false; // 排除分牌
+        if (c.suit === 'joker') return false; // 排除大小王
+        if (c.rank === getRankFromLevel(gameState.trumpLevel)) return false; // 排除级牌
+        return true;
+      });
+      if (cheapLosing.length > 0) {
+        cheapLosing.sort((a, b) => a.score - b.score);
+        candidates.push(cheapLosing[0]);
       } else {
-        // 选择最小的牌
+        // 只剩分牌/大牌可出，出最小的
         losingPlays.sort((a, b) => a.score - b.score);
         candidates.push(losingPlays[0]);
       }
@@ -1767,8 +1840,8 @@ function selectOpponentLeadingButTeammateWinningPlay(hand: Card[], leadCards: Ca
   if (sameSuitCards.length > 0) {
     const leadIsTrump = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel);
 
-    // 如果首家出对牌，跟最小的对牌
-    if ((leadPattern.type === 'pair' || leadPattern.type === 'triple' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+    // 如果首家出对牌，跟最小的对牌（拖拉机已在上方处理，不要拆成对子）
+    if ((leadPattern.type === 'pair' || leadPattern.type === 'triple') && sameSuitCards.length >= 2) {
       const pairs = findPairsSimple(sameSuitCards);
       if (pairs.length > 0) {
         pairs.sort((a, b) =>
@@ -1926,8 +1999,8 @@ function selectOpponentWinningPlay(hand: Card[], leadCards: Card[], sameSuitCard
     }
   }
 
-  // 如果首家出对牌或拖拉机，考虑对牌
-  if ((leadPattern.type === 'pair' || leadPattern.type === 'triple' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+  // 如果首家出对牌，考虑对牌（拖拉机已在上方处理，不要拆成对子）
+  if ((leadPattern.type === 'pair' || leadPattern.type === 'triple') && sameSuitCards.length >= 2) {
     const pairs = findPairsSimple(sameSuitCards);
     const leadSuit = isTrump(leadCards[0], gameState.trumpSuit, gameState.trumpLevel) ? 'trump' : leadCards[0].suit;
 
@@ -1995,6 +2068,18 @@ function selectOpponentWinningPlay(hand: Card[], leadCards: Card[], sameSuitCard
     }
 
     if (winningPlays.length > 0) {
+      // 闲家扣底：最后几墩有扣底意图时，更积极地赢牌（用大主牌抢底）
+      if (analysis.bottomCapture && !analysis.isDealer) {
+        const bigTrumpWins = winningPlays.filter(p => {
+          const c = p.cards[0];
+          return c.suit === 'joker' || c.rank === getRankFromLevel(gameState.trumpLevel) || c.rank === 'A' || c.rank === '2';
+        });
+        if (bigTrumpWins.length > 0 && analysis.tricksRemaining <= 2) {
+          bigTrumpWins.sort((a, b) => b.score - a.score);
+          candidates.push({ ...bigTrumpWins[0], score: 90, reason: '扣底：大主牌抢赢' });
+        }
+      }
+
       // 跟主牌且非末家：评估是否有好副牌值得抢出牌权
       if (leadIsTrump && !analysis.isLastPlayer) {
         // 检查是否有好副牌（A/拖拉机/大对子）值得抢出牌权后出牌
@@ -2077,20 +2162,19 @@ function selectOpponentWinningPlay(hand: Card[], leadCards: Card[], sameSuitCard
     }
 
     if (losingPlays.length > 0) {
-      // 跟主牌且非末家：优先不出分牌（10/K），避免送给对手分数
-      if (leadIsTrump && !analysis.isLastPlayer) {
-        const nonPointLosing = losingPlays.filter(p => !POINT_CARDS[p.cards[0].rank]);
-        if (nonPointLosing.length > 0) {
-          // 有非分牌可选，出最小非分牌
-          nonPointLosing.sort((a, b) => a.score - b.score);
-          candidates.push(nonPointLosing[0]);
-        } else {
-          // 只有分牌，出最小的
-          losingPlays.sort((a, b) => a.score - b.score);
-          candidates.push(losingPlays[0]);
-        }
+      // 无法赢时：排除分牌和高价值牌（大王/小王/级牌），出最小的普通牌
+      const cheapLosing = losingPlays.filter(p => {
+        const c = p.cards[0];
+        if (POINT_CARDS[c.rank]) return false; // 排除分牌
+        if (c.suit === 'joker') return false; // 排除大小王
+        if (c.rank === getRankFromLevel(gameState.trumpLevel)) return false; // 排除级牌
+        return true;
+      });
+      if (cheapLosing.length > 0) {
+        cheapLosing.sort((a, b) => a.score - b.score);
+        candidates.push(cheapLosing[0]);
       } else {
-        // 选择最小的牌
+        // 只剩分牌/大牌可出，出最小的
         losingPlays.sort((a, b) => a.score - b.score);
         candidates.push(losingPlays[0]);
       }
@@ -2136,8 +2220,8 @@ function selectDefaultFollowPlay(hand: Card[], leadCards: Card[], sameSuitCards:
       evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
     );
 
-    // 如果首家出对牌，优先跟对牌
-    if ((leadPattern.type === 'pair' || leadPattern.type === 'triple' || leadPattern.type === 'tractor') && sameSuitCards.length >= 2) {
+    // 如果首家出对牌，优先跟对牌（拖拉机需单独处理，不要拆成对子）
+    if ((leadPattern.type === 'pair' || leadPattern.type === 'triple') && sameSuitCards.length >= 2) {
       const pairs = findPairsSimple(sameSuitCards);
       if (pairs.length > 0) {
         pairs.sort((a, b) =>

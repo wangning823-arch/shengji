@@ -366,7 +366,7 @@ function handleOfflinePlay(roomId: string, game: GameEngine, seat: number): void
     const cardIds = [hand[0].id];
     const result = game.play(seat, cardIds);
     if (result.success) {
-      broadcast(roomId, { type: 'cards_played', seat, cards: result.playedCards, nextSeat: result.nextSeat });
+      broadcast(roomId, { type: 'cards_played', seat, cards: result.playedCards, nextSeat: result.nextSeat, currentWinnerSeat: result.currentWinnerSeat });
       if (result.trickEnded) {
         broadcast(roomId, { type: 'trick_ended', winnerSeat: result.winnerSeat, winnerTeam: result.winnerTeam, points: result.points, scores: result.scores, nextSeat: result.nextSeat });
       }
@@ -1272,7 +1272,8 @@ async function handleAITurn(roomId: string, game: GameEngine, seat: number): Pro
           type: 'cards_played',
           seat,
           cards: result.playedCards,
-          nextSeat: result.nextSeat
+          nextSeat: result.nextSeat,
+          currentWinnerSeat: result.currentWinnerSeat
         });
 
         if (result.trickEnded) {
@@ -1803,7 +1804,8 @@ const messageHandlers: MessageHandlers = {
         type: 'cards_played',
         seat: ws.seat,
         cards: result.playedCards,
-        nextSeat: result.nextSeat
+        nextSeat: result.nextSeat,
+        currentWinnerSeat: result.currentWinnerSeat
       });
 
       if (result.trickEnded) {
