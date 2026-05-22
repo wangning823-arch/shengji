@@ -872,6 +872,8 @@ export function selectLeadPlay(hand: Card[], gameState: any, seat: number, team:
         // 庄家保底：主牌数量接近保留线时，大幅降低出主意愿
         if (analysis.bottomProtection >= 2 && analysis.trumpCount <= analysis.trumpReserve + 2) {
           trumpClearScore = 10; // 几乎不出主，保留主牌保底
+        } else if (analysis.bottomProtection >= 2) {
+          trumpClearScore = 20; // 强保护但主牌多：降低出单主意愿，优先出副牌
         } else if (analysis.bottomProtection >= 1 && analysis.trumpCount <= analysis.trumpReserve + 1) {
           trumpClearScore = 25;
         }
@@ -905,31 +907,81 @@ export function selectLeadPlay(hand: Card[], gameState: any, seat: number, team:
   const trumpTractors = findTractors(trumps, ts, tl).filter(t => !t.some(c => c.suit === 'joker' && c.rank === 'big'));
   if (trumpTractors.length > 0) {
     trumpTractors.sort((a, b) => b.length - a.length);
-    let trumpTractorScore = 85;
-    if (isMyTeamDealer2 && analysis.bottomProtection >= 2 && analysis.trumpCount <= analysis.trumpReserve + 3) {
-      trumpTractorScore = 15; // 庄家保底：不出主牌拖拉机
+    let trumpTractorScore: number;
+    if (isMyTeamDealer2) {
+      // 庄家：适度出拖拉机清主，但保留部分主牌
+      if (analysis.bottomProtection >= 2 && analysis.trumpCount <= analysis.trumpReserve + 3) {
+        trumpTractorScore = 10; // 强保护且主牌少：不出拖拉机
+      } else if (analysis.bottomProtection >= 2) {
+        trumpTractorScore = 15; // 强保护但主牌多：也尽量不出
+      } else if (analysis.bottomProtection >= 1) {
+        trumpTractorScore = 45;
+      } else {
+        trumpTractorScore = 75; // 无保护：拖拉机清主高效
+      }
+    } else {
+      // 闲家：保留拖拉机到最后扣底
+      if (analysis.bottomCapture) {
+        trumpTractorScore = 95; // 扣底：拖拉机优先级最高
+      } else {
+        trumpTractorScore = 15; // 非残局：保留拖拉机
+      }
     }
-    candidates.push({ cards: trumpTractors[0], score: trumpTractorScore, reason: '出主牌拖拉机' });
+    candidates.push({ cards: trumpTractors[0], score: trumpTractorScore, reason: analysis.bottomCapture && !isMyTeamDealer2 ? '扣底：出主牌拖拉机' : '出主牌拖拉机' });
   }
 
   // 10. 主牌对子（排除包含大王的，排除已组成拖拉机的）— 对子比单张清主更高效
   const trumpPairs = findPairs(trumps).filter(p => !p.some(c => c.suit === 'joker' && c.rank === 'big'));
   for (const pair of trumpPairs) {
     const val = evaluateCardValue(pair[0], ts, tl);
-    let trumpPairScore = 80 + (val >= 90 ? 5 : 0);
-    // 庄家保底：主牌对子也降低出牌意愿
-    if (isMyTeamDealer2 && analysis.bottomProtection >= 2 && analysis.trumpCount <= analysis.trumpReserve + 3) {
-      trumpPairScore = 15;
+    let trumpPairScore: number;
+    let trumpPairReason = '出主牌对子';
+
+    if (isMyTeamDealer2) {
+      // 庄家：适度出对清主，但保留至少1-2对防副牌对
+      if (analysis.bottomProtection >= 2 && analysis.trumpCount <= analysis.trumpReserve + 3) {
+        trumpPairScore = 10; // 强保护且主牌少：不出对
+      } else if (analysis.bottomProtection >= 2) {
+        trumpPairScore = 15; // 强保护但主牌多：也尽量不出
+      } else if (analysis.bottomProtection >= 1) {
+        trumpPairScore = 40; // 中等保护：降低出对意愿
+      } else {
+        trumpPairScore = 55; // 无保护：适度清主对，保留部分防副对
+      }
+    } else {
+      // 闲家：保留对牌到最后用于扣底
+      if (analysis.bottomCapture) {
+        // 最后几墩：对牌积极出，抢赢扣底
+        trumpPairScore = val >= 90 ? 90 : 85;
+        trumpPairReason = '扣底：出主对抢赢';
+      } else {
+        // 非残局：保留对牌，不出
+        trumpPairScore = 15;
+      }
     }
+
     // 有分对在对手缺门花色时，提升主对优先级（先清主对，保护分对）
     if (hasScoringPairInVoidSuit && opponentsLikelyHaveTrumpPairs) {
-      trumpPairScore = 100;
+      trumpPairScore = Math.max(trumpPairScore, 100);
     }
-    candidates.push({ cards: pair, score: trumpPairScore, reason: '出主牌对子' });
+    candidates.push({ cards: pair, score: trumpPairScore, reason: trumpPairReason });
   }
 
-  // 11. 大王 — 庄家保留保底，闲家出牌抢底
+  // 11. 大王对 — 庄家保留保底，闲家扣底时出
   const bigJokers = hand.filter(c => c.suit === 'joker' && c.rank === 'big');
+  if (bigJokers.length >= 2) {
+    let bigJokerPairScore: number;
+    if (isMyTeamDealer2) {
+      // 庄家：大王对是保底核心，绝不轻易出
+      bigJokerPairScore = analysis.bottomProtection >= 2 ? 5 : 15;
+    } else {
+      // 闲家：保留大王对到最后扣底
+      bigJokerPairScore = analysis.bottomCapture ? 95 : 10;
+    }
+    candidates.push({ cards: bigJokers.slice(0, 2), score: bigJokerPairScore, reason: isMyTeamDealer2 && analysis.bottomProtection > 0 ? '大王对保底保留' : '出大王对' });
+  }
+
+  // 12. 大王单张 — 庄家保留保底，闲家出牌抢底
   if (bigJokers.length > 0) {
     let bigJokerScore = 20;
     if (isMyTeamDealer2) {
