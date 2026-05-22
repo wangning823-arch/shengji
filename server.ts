@@ -69,6 +69,18 @@ try {
 // 房间中的AI玩家
 const roomAIPlayers = new Map<string, Record<number, LLMAIPlayer>>();
 
+// 反主确认追踪
+interface RebidConfirm {
+  roomId: string;
+  seat: number;
+  nickname: string;
+  cards: Card[];
+  trumpSuit: string | null;
+  confirmed: Set<number>; // 已确认的玩家座位
+  timeout: NodeJS.Timeout;
+}
+const pendingRebidConfirms = new Map<string, RebidConfirm>();
+
 const PORT = process.env.PORT || 3003;
 const rooms = new Map<string, Room>();
 const games = new Map<string, GameEngine>();
@@ -574,31 +586,119 @@ function handleRebidResult(roomId: string, game: GameEngine, seat: number, bidCa
         cards: bidCards
       });
 
-      const nextSeat = (seat + 1) % 4;
-      let nextRebidSeat = -1;
-      for (let i = 0; i < 3; i++) {
-        const s = (nextSeat + i) % 4;
-        if (game.canRebid(s)) {
-          nextRebidSeat = s;
-          break;
-        }
-      }
-
-      if (nextRebidSeat === -1) {
-        confirmAndEnterBottom(roomId, game);
-      } else {
-        game.currentSeat = nextRebidSeat;
-        broadcast(roomId, {
-          type: 'game_state',
-          state: game.toJSON()
-        });
-        handleRebidTurn(roomId, game, nextRebidSeat);
-      }
+      // 发送反主通知，等待确认
+      sendRebidNotification(roomId, game, seat, bidCards, result.trumpSuit ?? null);
       return;
     }
   }
 
   const nextSeat = (seat + 1) % 4;
+  let nextRebidSeat = -1;
+  for (let i = 0; i < 3; i++) {
+    const s = (nextSeat + i) % 4;
+    if (game.canRebid(s)) {
+      nextRebidSeat = s;
+      break;
+    }
+  }
+
+  if (nextRebidSeat === -1) {
+    confirmAndEnterBottom(roomId, game);
+  } else {
+    game.currentSeat = nextRebidSeat;
+    broadcast(roomId, {
+      type: 'game_state',
+      state: game.toJSON()
+    });
+    handleRebidTurn(roomId, game, nextRebidSeat);
+  }
+}
+
+function sendRebidNotification(roomId: string, game: GameEngine, seat: number, cards: Card[], trumpSuit: string | null): void {
+  const player = game.players[seat];
+  const activePlayers = game.players.filter(p => p.userId);
+
+  // 清除之前的确认（如果有）
+  const existingConfirm = pendingRebidConfirms.get(roomId);
+  if (existingConfirm) {
+    clearTimeout(existingConfirm.timeout);
+    pendingRebidConfirms.delete(roomId);
+  }
+
+  // 创建新的确认追踪
+  const confirm: RebidConfirm = {
+    roomId,
+    seat,
+    nickname: player.nickname || `玩家${seat}`,
+    cards,
+    trumpSuit,
+    confirmed: new Set(),
+    timeout: setTimeout(() => {
+      // 30秒超时，自动确认
+      console.log(`[REBID] Room ${roomId} rebid confirmation timeout, auto-confirming`);
+      completeRebidConfirmation(roomId);
+    }, 30000)
+  };
+
+  pendingRebidConfirms.set(roomId, confirm);
+
+  // 广播反主通知
+  broadcast(roomId, {
+    type: 'rebid_notification',
+    seat,
+    nickname: player.nickname || `玩家${seat}`,
+    cards,
+    trumpSuit,
+    timeout: 30
+  });
+
+  // 自动确认AI玩家
+  const roomAIs = roomAIPlayers.get(roomId) || {};
+  for (let i = 0; i < 4; i++) {
+    if (roomAIs[i] && i !== seat) {
+      // AI玩家自动确认（延迟一小段时间模拟思考）
+      setTimeout(() => {
+        confirmRebid(roomId, i);
+      }, 500 + Math.random() * 1000);
+    }
+  }
+}
+
+function confirmRebid(roomId: string, seat: number): void {
+  const confirm = pendingRebidConfirms.get(roomId);
+  if (!confirm) return;
+
+  confirm.confirmed.add(seat);
+  console.log(`[REBID] Room ${roomId} player ${seat} confirmed, total: ${confirm.confirmed.size}/4`);
+
+  // 广播确认状态
+  broadcast(roomId, {
+    type: 'rebid_confirmed',
+    seat,
+    confirmedCount: confirm.confirmed.size,
+    totalCount: 4
+  });
+
+  // 检查是否所有人都确认了
+  if (confirm.confirmed.size >= 4) {
+    completeRebidConfirmation(roomId);
+  }
+}
+
+function completeRebidConfirmation(roomId: string): void {
+  const confirm = pendingRebidConfirms.get(roomId);
+  if (!confirm) return;
+
+  clearTimeout(confirm.timeout);
+  pendingRebidConfirms.delete(roomId);
+
+  const room = rooms.get(roomId);
+  if (!room || !room.gameId) return;
+  const game = games.get(room.gameId);
+  if (!game || !(game as any)._rebidPhase) return;
+
+  // 继续寻找下一个可以反主的玩家
+  const nextSeat = (confirm.seat + 1) % 4;
   let nextRebidSeat = -1;
   for (let i = 0; i < 3; i++) {
     const s = (nextSeat + i) % 4;
@@ -1505,6 +1605,15 @@ const messageHandlers: MessageHandlers = {
     }
 
     handleRebidResult(ws.roomId, game, ws.seat, null);
+  },
+
+  confirm_rebid(ws, msg) {
+    if (!ws.roomId) return;
+    const confirm = pendingRebidConfirms.get(ws.roomId);
+    if (!confirm) return;
+
+    // 确认反主通知
+    confirmRebid(ws.roomId, ws.seat);
   },
 
   set_bottom(ws, msg) {

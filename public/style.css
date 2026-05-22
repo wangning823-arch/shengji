@@ -1508,3 +1508,44 @@ body.mobile-game .history-play-seat {
     bottom: 4px;
   }
 }
+
+/* 反主确认对话框 */
+#rebid-confirm-dialog .modal-content {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10000;
+}
+
+#rebid-confirm-dialog h3 {
+  color: #f5a623;
+  margin-bottom: 15px;
+}
+
+#rebid-confirm-dialog p {
+  margin: 10px 0;
+  font-size: 14px;
+}
+
+#rebid-confirm-dialog .countdown {
+  color: #ff6b6b;
+  font-size: 13px;
+  margin-top: 15px;
+}
+
+#rebid-confirm-dialog .btn {
+  margin-top: 20px;
+  padding: 10px 30px;
+  font-size: 14px;
+  cursor: pointer;
+  border: none;
+  border-radius: 6px;
+  background: #4CAF50;
+  color: white;
+  transition: background 0.2s;
+}
+
+#rebid-confirm-dialog .btn:hover {
+  background: #45a049;
+}

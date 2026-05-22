@@ -536,6 +536,14 @@ const App = {
         this.showRebidTimer(msg.seconds);
         break;
 
+      case 'rebid_notification':
+        this.showRebidNotification(msg);
+        break;
+
+      case 'rebid_confirmed':
+        this.updateRebidConfirmation(msg);
+        break;
+
       case 'bid_made':
         this.showToast(`${this.getPlayerName(msg.seat)} 亮主 ${this.SUIT_NAMES[msg.trumpSuit] || '无主'}`);
         break;
@@ -1221,6 +1229,73 @@ const App = {
       clearInterval(this._rebidTimerInterval);
       this._rebidTimerInterval = null;
     }
+  },
+
+  showRebidNotification(msg) {
+    const { seat, nickname, cards, trumpSuit, timeout } = msg;
+    const SUIT_NAMES = { spade: '黑桃', heart: '红心', diamond: '方块', club: '梅花' };
+    const RANK_NAMES = { small: '小王', big: '大王', '3': '3', '4': '4', '5': '5', '6': '6', '7': '7', '8': '8', '9': '9', '10': '10', J: 'J', Q: 'Q', K: 'K', A: 'A', '2': '2' };
+
+    // 构建牌的显示文本
+    const cardNames = cards.map(c => {
+      if (c.suit === 'joker') return RANK_NAMES[c.rank] || c.rank;
+      return (SUIT_NAMES[c.suit] || '') + (RANK_NAMES[c.rank] || c.rank);
+    }).join('');
+
+    const suitName = trumpSuit ? SUIT_NAMES[trumpSuit] : '无主';
+    const message = `${nickname} 使用 ${cardNames} 反主为 ${suitName}`;
+
+    // 创建确认对话框
+    const dialog = document.createElement('div');
+    dialog.id = 'rebid-confirm-dialog';
+    dialog.className = 'modal-overlay';
+    dialog.innerHTML = `
+      <div class="modal-content">
+        <h3>反主通知</h3>
+        <p>${message}</p>
+        <p class="countdown">将在 <span id="rebid-countdown">${timeout}</span> 秒后自动确认</p>
+        <button id="btn-confirm-rebid" class="btn btn-primary">确认</button>
+      </div>
+    `;
+    document.body.appendChild(dialog);
+
+    // 绑定确认按钮
+    document.getElementById('btn-confirm-rebid').addEventListener('click', () => {
+      this.confirmRebid();
+    });
+
+    // 倒计时
+    let countdown = timeout;
+    this._rebidCountdownInterval = setInterval(() => {
+      countdown--;
+      const countdownEl = document.getElementById('rebid-countdown');
+      if (countdownEl) countdownEl.textContent = countdown;
+      if (countdown <= 0) {
+        this.removeRebidDialog();
+      }
+    }, 1000);
+  },
+
+  confirmRebid() {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: 'confirm_rebid' }));
+    }
+    this.removeRebidDialog();
+  },
+
+  removeRebidDialog() {
+    if (this._rebidCountdownInterval) {
+      clearInterval(this._rebidCountdownInterval);
+      this._rebidCountdownInterval = null;
+    }
+    const dialog = document.getElementById('rebid-confirm-dialog');
+    if (dialog) dialog.remove();
+  },
+
+  updateRebidConfirmation(msg) {
+    const { seat, confirmedCount, totalCount } = msg;
+    // 可以在这里更新确认进度显示
+    console.log(`Rebid confirmed: ${confirmedCount}/${totalCount}`);
   },
 
   setBottom() {

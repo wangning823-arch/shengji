@@ -64,6 +64,17 @@ export interface UpgradeSteps {
   idle: number;
 }
 
+export interface BidRecord {
+  seat: number;
+  userId?: string;
+  nickname?: string;
+  action: 'bid' | 'rebid' | 'pass';
+  cards?: Card[];
+  trumpSuit?: string | null;
+  result: 'success' | 'fail' | 'pass';
+  reason?: string;
+}
+
 export const SUITS = ['spade', 'heart', 'diamond', 'club'];
 export const RANKS = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2'];
 export const RANK_ORDER: Record<string, number> = { '3': 0, '4': 1, '5': 2, '6': 3, '7': 4, '8': 5, '9': 6, '10': 7, 'J': 8, 'Q': 9, 'K': 10, 'A': 11, '2': 12 };
@@ -689,6 +700,7 @@ export class GameEngine {
   leadSeat: number;
   currentSeat: number;
   tricks: Trick[];
+  bidRecords: BidRecord[];
   scores: Scores;
   levels: Levels;
   trumpLevel: number;
@@ -715,6 +727,7 @@ export class GameEngine {
     this.leadSeat = 0;
     this.currentSeat = 0;
     this.tricks = []; // 完整的牌局记录
+    this.bidRecords = []; // 亮主/反主记录
     this.scores = { team1: 0, team2: 0 };
     this.levels = levels || { team1: 2, team2: 2 };
     this.trumpLevel = this.levels[`team${this.players[dealer].team}`] || 2;
@@ -789,12 +802,27 @@ export class GameEngine {
 
     const trumpLevelStr = getRankFromLevel(this.trumpLevel);
 
+    // 记录亮主/反主尝试（无论成功与否）
+    const recordBidAttempt = (success: boolean, reason?: string, action: 'bid' | 'rebid' = this.bids.length === 0 ? 'bid' : 'rebid') => {
+      this.bidRecords.push({
+        seat,
+        userId: player.userId,
+        nickname: player.nickname,
+        action,
+        cards: bidCards,
+        trumpSuit: success ? (this.trumpSuit || null) : undefined,
+        result: success ? 'success' : 'fail',
+        reason
+      });
+    };
+
     // 分类：级牌、王、其他牌
     const levelCards = bidCards.filter(c => c.rank === trumpLevelStr && c.suit !== 'joker');
     const jokerCards = bidCards.filter(c => c.suit === 'joker');
     const otherCards = bidCards.filter(c => c.rank !== trumpLevelStr && c.suit !== 'joker');
 
     if (otherCards.length > 0) {
+      recordBidAttempt(false, '只能使用级牌和王');
       return { success: false, reason: '只能使用级牌和王' };
     }
 
@@ -805,6 +833,7 @@ export class GameEngine {
     if (levelCards.length > 0) {
       const firstSuit = levelCards[0].suit;
       if (levelCards.some(c => c.suit !== firstSuit)) {
+        recordBidAttempt(false, '级牌必须同花色');
         return { success: false, reason: '级牌必须同花色' };
       }
     }
@@ -821,6 +850,7 @@ export class GameEngine {
         if (existingBid.suit === null) {
           // 反无主：需要更多或更大的王
           if (compareJokers(jokerCards, existingBid.jokers || []) <= 0) {
+            recordBidAttempt(false, '需要更多或更大的王');
             return { success: false, reason: '需要更多或更大的王' };
           }
         }
@@ -832,6 +862,7 @@ export class GameEngine {
       }
       this.trumpSuit = null;
       this.bids.push({ seat, suit: null, levelCount: 0, jokers: jokerCards, cards: bidCards });
+      recordBidAttempt(true);
       this.currentSeat = (this.currentSeat + 1) % 4;
       this.bidRoundStartSeat = this.currentSeat;
       return { success: true, trumpSuit: null };
@@ -840,6 +871,7 @@ export class GameEngine {
     if (!existingBid) {
       // 首次亮主：单张级牌 + 1张王
       if (levelCards.length < 1 || jokerCards.length < 1) {
+        recordBidAttempt(false, '首次亮主需要1张级牌+1张王');
         return { success: false, reason: '首次亮主需要1张级牌+1张王' };
       }
       this.status = 'bidding';
@@ -848,6 +880,7 @@ export class GameEngine {
       }
       this.trumpSuit = levelCards[0].suit;
       this.bids.push({ seat, suit: levelCards[0].suit, levelCount: levelCards.length, jokers: jokerCards, cards: bidCards });
+      recordBidAttempt(true);
       this.currentSeat = (this.currentSeat + 1) % 4;
       this.bidRoundStartSeat = this.currentSeat;
       return { success: true, trumpSuit: levelCards[0].suit };
@@ -856,12 +889,15 @@ export class GameEngine {
     // 反无主：只能纯王，需要更大
     if (existingBid.suit === null) {
       if (levelCards.length > 0) {
+        recordBidAttempt(false, '反无主只能使用王');
         return { success: false, reason: '反无主只能使用王' };
       }
       if (jokerCards.length < 2) {
+        recordBidAttempt(false, '反无主需要2张王');
         return { success: false, reason: '反无主需要2张王' };
       }
       if (compareJokers(jokerCards, existingBid.jokers || []) <= 0) {
+        recordBidAttempt(false, '需要更多或更大的王');
         return { success: false, reason: '需要更多或更大的王' };
       }
       if (enteringBidding) this.status = 'bidding';
@@ -870,6 +906,7 @@ export class GameEngine {
       }
       this.trumpSuit = null;
       this.bids.push({ seat, suit: null, levelCount: 0, jokers: jokerCards, cards: bidCards });
+      recordBidAttempt(true);
       this.currentSeat = (this.currentSeat + 1) % 4;
       this.bidRoundStartSeat = this.currentSeat;
       return { success: true, trumpSuit: null };
@@ -877,11 +914,13 @@ export class GameEngine {
 
     // 反有主：需要比当前多1张级牌 + 1张王
     if (jokerCards.length === 0) {
+      recordBidAttempt(false, '反主必须包含王');
       return { success: false, reason: '反主必须包含王' };
     }
 
     const existingLevelCount = existingBid.levelCount || 0;
     if (levelCards.length < existingLevelCount + 1) {
+      recordBidAttempt(false, `反主需要至少${existingLevelCount + 1}张级牌`);
       return { success: false, reason: `反主需要至少${existingLevelCount + 1}张级牌` };
     }
 
@@ -891,6 +930,7 @@ export class GameEngine {
     }
     this.trumpSuit = levelCards[0].suit;
     this.bids.push({ seat, suit: levelCards[0].suit, levelCount: levelCards.length, jokers: jokerCards, cards: bidCards });
+    recordBidAttempt(true);
     this.currentSeat = (this.currentSeat + 1) % 4;
     this.bidRoundStartSeat = this.currentSeat;
     return { success: true, trumpSuit: levelCards[0].suit };
@@ -899,6 +939,17 @@ export class GameEngine {
   passBid(seat: number): { success: boolean; reason?: string; action?: string } {
     if (this.status !== 'dealing' && this.status !== 'bidding') return { success: false, reason: '不在亮主阶段' };
     if (seat !== this.currentSeat) return { success: false, reason: '不是当前玩家的回合' };
+
+    // 记录过牌操作
+    const player = this.players[seat];
+    this.bidRecords.push({
+      seat,
+      userId: player.userId,
+      nickname: player.nickname,
+      action: 'pass',
+      result: 'pass'
+    });
+
     this.currentSeat = (this.currentSeat + 1) % 4;
 
     // dealing 阶段转完一圈
@@ -1271,6 +1322,7 @@ export class GameEngine {
         avatar: p.avatar
       })),
       bids: this.bids,
+      bidRecords: this.bidRecords,
       tricks: this.tricks
     };
   }
