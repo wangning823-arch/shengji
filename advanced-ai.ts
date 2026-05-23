@@ -692,6 +692,22 @@ export function selectLeadPlay(hand: Card[], gameState: any, seat: number, team:
     return 0; // 安全
   }
 
+  // 残局清副牌检测：手牌少且有大主牌保底时，优先出副牌
+  // 场景：手里有大小王+级牌对+1-2张副牌，应先清副牌，大主牌留到最后赢
+  let endgameClearNonTrump = false;
+  if (nonTrumps.length > 0 && handCount <= 8) {
+    const levelRank = getRankFromLevel(tl);
+    const bigJokerCount = trumps.filter(c => c.suit === 'joker' && c.rank === 'big').length;
+    const smallJokerCount = trumps.filter(c => c.suit === 'joker' && c.rank === 'small').length;
+    const levelCards = trumps.filter(c => c.rank === levelRank);
+    const levelPairs = findPairs(levelCards).length;
+    // 大主牌数 = 大王 + 小王 + 级牌对（这些都能保底赢最后几墩）
+    const guaranteedWinners = bigJokerCount + smallJokerCount + levelPairs * 2;
+    if (guaranteedWinners >= nonTrumps.length) {
+      endgameClearNonTrump = true;
+    }
+  }
+
   // 1. 副牌A对子（确定大的牌先出）
   const nonTrumpPairs = findPairs(nonTrumps);
   const acePairs = nonTrumpPairs.filter(p => p[0].rank === 'A');
@@ -745,7 +761,8 @@ export function selectLeadPlay(hand: Card[], gameState: any, seat: number, team:
       // 同花色有A对：K优先出，评分125（高于A对120），先跑10分
       candidates.push({ cards: [card], score: 125 + safety, reason: '出副牌K(A对保,先跑分)' });
     } else {
-      candidates.push({ cards: [card], score: (hasAce ? 100 : 45) + safety, reason: hasAce ? '出副牌K(确保最大)' : '出副牌K(无A保,不出)' });
+      const kScore = endgameClearNonTrump ? 80 : (hasAce ? 100 : 45);
+      candidates.push({ cards: [card], score: kScore + safety, reason: endgameClearNonTrump ? '残局先清副牌K' : (hasAce ? '出副牌K(确保最大)' : '出副牌K(无A保,不出)') });
     }
   }
 
@@ -834,7 +851,8 @@ export function selectLeadPlay(hand: Card[], gameState: any, seat: number, team:
   const safeNonTrumps = nonTrumps.filter(c => !POINT_CARDS[c.rank] && c.rank !== 'A');
   safeNonTrumps.sort((a, b) => RANK_ORDER[b.rank] - RANK_ORDER[a.rank]);
   if (safeNonTrumps.length > 0) {
-    candidates.push({ cards: [safeNonTrumps[0]], score: 55, reason: '出副牌(非分)' });
+    const safeScore = endgameClearNonTrump ? 80 : 55;
+    candidates.push({ cards: [safeNonTrumps[0]], score: safeScore, reason: endgameClearNonTrump ? '残局先清副牌' : '出副牌(非分)' });
   }
 
   // 9. 副牌分牌（10,5）— 没有A保护时不安全，评分低
@@ -842,7 +860,9 @@ export function selectLeadPlay(hand: Card[], gameState: any, seat: number, team:
   for (const card of pointNonTrumps) {
     const hasAce = suitAcesKnown[card.suit];
     const safety = suitSafetyScore(card.suit);
-    candidates.push({ cards: [card], score: (hasAce ? 55 : 35) + safety, reason: hasAce ? `出副牌${card.rank}(有A保)` : `出副牌${card.rank}(无A保,不出)` });
+    const baseScore = hasAce ? 55 : 35;
+    const pointScore = endgameClearNonTrump ? 80 : baseScore;
+    candidates.push({ cards: [card], score: pointScore + safety, reason: endgameClearNonTrump ? '残局先清副牌' : (hasAce ? `出副牌${card.rank}(有A保)` : `出副牌${card.rank}(无A保,不出)`) });
   }
 
   // 9. 小主牌清主（排除大王和小王）— 清主比出无意义的裸副牌更重要
