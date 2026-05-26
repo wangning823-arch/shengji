@@ -706,7 +706,12 @@ export class FallbackAI {
     const candidates = CandidateGenerator.generateCandidates(
       hand, leadCards, gameState.trumpSuit, gameState.trumpLevel
     );
-    return candidates[0].cards;
+    for (const c of candidates) {
+      const v = validatePlay(hand, c.cards, leadCards, gameState.trumpSuit, gameState.trumpLevel);
+      if (v.valid) return c.cards;
+    }
+    // 最后保底：返回第一张手牌
+    return [hand[0]];
   }
 
   static decideBid(hand: Card[], trumpLevel: number): Card[] | null {
