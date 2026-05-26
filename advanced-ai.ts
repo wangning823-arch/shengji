@@ -1825,23 +1825,70 @@ function selectTeammateLosingPlay(hand: Card[], leadCards: Card[], sameSuitCards
       }
     }
   } else {
-    // 没有同花色，优先将吃管住对手
+    // 没有同花色
     const trickPoints = analysis.trickPoints || 0;
-    const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints, analysis.isLastPlayer!, analysis);
-    candidates.push(...chopCandidates);
 
-    // 垫牌
-    const nonTrumps = otherCards.filter(c => !isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
-    if (nonTrumps.length > 0) {
-      nonTrumps.sort((a, b) =>
-        evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
-        evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
+    // 对手已经将吃 → 先尝试用更大的主牌管住，管不住才垫牌
+    const opponentChopped = analysis.currentChopper !== null && analysis.currentChopperTeam !== analysis.myTeam;
+    if (opponentChopped && analysis.currentChopperTrumps) {
+      // 尝试出比对手将吃更大的主牌
+      const biggerChops = _generateChopCandidatesBiggerThan(
+        otherCards.filter(c => isTrump(c, gameState.trumpSuit, gameState.trumpLevel)),
+        leadCards, leadPattern, 85, gameState.trumpSuit, gameState.trumpLevel,
+        analysis.currentChopperTrumps
       );
-      candidates.push({
-        cards: [nonTrumps[0]],
-        score: 50,
-        reason: '垫牌'
-      });
+      if (biggerChops.length > 0) {
+        candidates.push(...biggerChops);
+      }
+    }
+
+    // 如果没有将吃候选（对手将吃管不住，或无人将吃）→ 垫牌
+    if (candidates.length === 0) {
+      // 无人将吃时尝试普通将吃
+      if (!opponentChopped) {
+        const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints, analysis.isLastPlayer!, analysis);
+        candidates.push(...chopCandidates);
+      }
+
+      // 垫最小非分副牌
+      const nonTrumps = otherCards.filter(c =>
+        !isTrump(c, gameState.trumpSuit, gameState.trumpLevel) && !POINT_CARDS[c.rank]
+      );
+      if (nonTrumps.length > 0) {
+        nonTrumps.sort((a, b) =>
+          evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
+          evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
+        );
+        candidates.push({ cards: [nonTrumps[0]], score: 55, reason: '垫最小非分副牌' });
+      } else {
+        // 没有非分副牌，出最小的副牌
+        const allNonTrumps = otherCards.filter(c => !isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
+        if (allNonTrumps.length > 0) {
+          allNonTrumps.sort((a, b) =>
+            evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
+            evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
+          );
+          candidates.push({ cards: [allNonTrumps[0]], score: 45, reason: '垫最小副牌' });
+        } else {
+          // 只剩主牌，出最小非分主牌
+          const nonPointTrumps = otherCards.filter(c =>
+            isTrump(c, gameState.trumpSuit, gameState.trumpLevel) && !POINT_CARDS[c.rank]
+          );
+          if (nonPointTrumps.length > 0) {
+            nonPointTrumps.sort((a, b) =>
+              evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
+              evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
+            );
+            candidates.push({ cards: [nonPointTrumps[0]], score: 30, reason: '垫最小非分主牌' });
+          } else {
+            otherCards.sort((a, b) =>
+              evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
+              evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
+            );
+            candidates.push({ cards: [otherCards[0]], score: 20, reason: '垫最小主牌' });
+          }
+        }
+      }
     }
   }
 
@@ -2208,23 +2255,65 @@ function selectOpponentWinningPlay(hand: Card[], leadCards: Card[], sameSuitCard
       }
     }
   } else {
-    // 没有同花色，优先考虑主牌将吃
+    // 没有同花色
     const trickPoints = analysis.trickPoints || 0;
-    const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints, analysis.isLastPlayer!, analysis);
-    candidates.push(...chopCandidates);
 
-    // 垫牌
-    const nonTrumps = otherCards.filter(c => !isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
-    if (nonTrumps.length > 0) {
-      nonTrumps.sort((a, b) =>
-        evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
-        evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
+    // 对手已经将吃 → 先尝试用更大的主牌管住，管不住才垫牌
+    const opponentChopped = analysis.currentChopper !== null && analysis.currentChopperTeam !== analysis.myTeam;
+    if (opponentChopped && analysis.currentChopperTrumps) {
+      const biggerChops = _generateChopCandidatesBiggerThan(
+        otherCards.filter(c => isTrump(c, gameState.trumpSuit, gameState.trumpLevel)),
+        leadCards, leadPattern, 85, gameState.trumpSuit, gameState.trumpLevel,
+        analysis.currentChopperTrumps
       );
-      candidates.push({
-        cards: [nonTrumps[0]],
-        score: 40,
-        reason: '垫牌'
-      });
+      if (biggerChops.length > 0) {
+        candidates.push(...biggerChops);
+      }
+    }
+
+    // 如果没有将吃候选 → 垫牌
+    if (candidates.length === 0) {
+      if (!opponentChopped) {
+        const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 80, trickPoints, analysis.isLastPlayer!, analysis);
+        candidates.push(...chopCandidates);
+      }
+
+      const nonTrumps = otherCards.filter(c =>
+        !isTrump(c, gameState.trumpSuit, gameState.trumpLevel) && !POINT_CARDS[c.rank]
+      );
+      if (nonTrumps.length > 0) {
+        nonTrumps.sort((a, b) =>
+          evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
+          evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
+        );
+        candidates.push({ cards: [nonTrumps[0]], score: 50, reason: '垫最小非分副牌' });
+      } else {
+        const allNonTrumps = otherCards.filter(c => !isTrump(c, gameState.trumpSuit, gameState.trumpLevel));
+        if (allNonTrumps.length > 0) {
+          allNonTrumps.sort((a, b) =>
+            evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
+            evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
+          );
+          candidates.push({ cards: [allNonTrumps[0]], score: 40, reason: '垫最小副牌' });
+        } else {
+          const nonPointTrumps = otherCards.filter(c =>
+            isTrump(c, gameState.trumpSuit, gameState.trumpLevel) && !POINT_CARDS[c.rank]
+          );
+          if (nonPointTrumps.length > 0) {
+            nonPointTrumps.sort((a, b) =>
+              evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
+              evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
+            );
+            candidates.push({ cards: [nonPointTrumps[0]], score: 25, reason: '垫最小非分主牌' });
+          } else {
+            otherCards.sort((a, b) =>
+              evaluateCardValue(a, gameState.trumpSuit, gameState.trumpLevel) -
+              evaluateCardValue(b, gameState.trumpSuit, gameState.trumpLevel)
+            );
+            candidates.push({ cards: [otherCards[0]], score: 15, reason: '垫最小主牌' });
+          }
+        }
+      }
     }
   }
 
@@ -2263,12 +2352,30 @@ function selectDefaultFollowPlay(hand: Card[], leadCards: Card[], sameSuitCards:
     return [sameSuitCards[0]];
   }
 
-  // 没有同花色，优先将吃
+  // 没有同花色
   const trickPoints = analysis.trickPoints || 0;
-  const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 70, trickPoints, analysis.isLastPlayer!, analysis);
-  if (chopCandidates.length > 0) {
-    chopCandidates.sort((a, b) => b.score - a.score);
-    return chopCandidates[0].cards;
+
+  // 对手已经将吃 → 先尝试用更大的主牌管住，管不住才垫牌
+  const opponentChopped = analysis.currentChopper !== null && analysis.currentChopperTeam !== analysis.myTeam;
+  if (opponentChopped && analysis.currentChopperTrumps) {
+    const biggerChops = _generateChopCandidatesBiggerThan(
+      otherCards.filter(c => isTrump(c, gameState.trumpSuit, gameState.trumpLevel)),
+      leadCards, leadPattern, 75, gameState.trumpSuit, gameState.trumpLevel,
+      analysis.currentChopperTrumps
+    );
+    if (biggerChops.length > 0) {
+      biggerChops.sort((a, b) => b.score - a.score);
+      return biggerChops[0].cards;
+    }
+  }
+
+  // 无人将吃时尝试普通将吃
+  if (!opponentChopped) {
+    const chopCandidates = generateChopCandidates(otherCards, leadCards, gameState, 70, trickPoints, analysis.isLastPlayer!, analysis);
+    if (chopCandidates.length > 0) {
+      chopCandidates.sort((a, b) => b.score - a.score);
+      return chopCandidates[0].cards;
+    }
   }
 
   // 垫牌
