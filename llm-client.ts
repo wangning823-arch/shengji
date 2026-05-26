@@ -53,7 +53,7 @@ export class LLMClient {
   private async callAnthropic(prompt: string, options: Record<string, any> = {}): Promise<string> {
     const data = JSON.stringify({
       model: options.model || this.model || 'claude-3-haiku-20240307',
-      max_tokens: options.maxTokens || 1024,
+      max_tokens: options.maxTokens || 2048,
       messages: [{
         role: 'user',
         content: prompt
@@ -86,7 +86,7 @@ export class LLMClient {
         role: 'user',
         content: prompt
       }],
-      max_tokens: options.maxTokens || 1024,
+      max_tokens: options.maxTokens || 2048,
       temperature: options.temperature || 0.7
     });
 
@@ -103,7 +103,8 @@ export class LLMClient {
       }
     }, data, (body: string) => {
       const result = JSON.parse(body);
-      return result.choices?.[0]?.message?.content || result.response || result.output || body;
+      const msg = result.choices?.[0]?.message;
+      return msg?.content || msg?.reasoning_content || result.response || result.output || body;
     });
   }
 
@@ -117,7 +118,7 @@ export class LLMClient {
         role: 'user',
         content: prompt
       }],
-      max_tokens: options.maxTokens || 1024,
+      max_tokens: options.maxTokens || 2048,
       temperature: options.temperature || 0.7
     });
 
@@ -138,8 +139,10 @@ export class LLMClient {
     }, data, (body: string) => {
       try {
         const result = JSON.parse(body);
-        // 尝试各种常见的响应格式
-        return result.choices?.[0]?.message?.content
+        const msg = result.choices?.[0]?.message;
+        // 尝试各种常见的响应格式（包括推理模型的reasoning_content）
+        return msg?.content
+            || msg?.reasoning_content
             || result.content?.[0]?.text
             || result.response
             || result.output

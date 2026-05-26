@@ -803,6 +803,7 @@ export class LLMAIPlayer {
   cardTracker: CardTracker;
   llmClient: LLMClient | null;
   useLLM: boolean;
+  onDebug: ((msg: any) => void) | null = null;
 
   constructor(seat: number, playerInfo?: PlayerInfo, llmConfig?: LLMConfig) {
     this.seat = seat;
@@ -850,7 +851,8 @@ export class LLMAIPlayer {
     }
 
     try {
-      return await this.decideWithLLM(gameState, leadCards);
+      const result = await this.decideWithLLM(gameState, leadCards);
+      return result;
     } catch (err) {
       console.error('LLM error, using SmartAI:', err);
       return SmartAI.selectBestPlay(
@@ -865,6 +867,12 @@ export class LLMAIPlayer {
     );
 
     const prompt = this.buildPrompt(gameState, candidates, leadCards);
+    const startTime = Date.now();
+
+    this.emitDebug('request', {
+      prompt: prompt.substring(0, 500) + (prompt.length > 500 ? '...' : ''),
+      candidates: candidates.map((c, i) => `选项${i+1}: ${c.description} [${c.cards.map(card => card.suit+card.rank).join(',')}]`),
+    });
 
     let attempt = 0;
     let lastError: string | null = null;
@@ -872,7 +880,15 @@ export class LLMAIPlayer {
     while (attempt < 2) {
       try {
         const response = await this.llmClient!.complete(prompt);
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         const selected = this.parseResponse(response, candidates);
+
+        this.emitDebug('response', {
+          elapsed: elapsed + 's',
+          raw: response.substring(0, 200),
+          selected: selected ? selected.map(c => c.suit+c.rank).join(',') : null,
+          attempt: attempt + 1,
+        });
 
         if (selected) {
           const validation = validatePlay(
@@ -881,17 +897,27 @@ export class LLMAIPlayer {
           );
 
           if (validation.valid) {
+            this.emitDebug('result', { success: true, cards: selected.map(c => c.suit+c.rank).join(',') });
             return selected;
           }
           lastError = validation.reason || null;
+          this.emitDebug('warn', { msg: `出牌校验失败: ${lastError}, 重试...` });
         }
-      } catch (e) {
-        console.error('LLM attempt error:', e);
+      } catch (e: any) {
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        this.emitDebug('error', { elapsed: elapsed + 's', msg: e.message || String(e) });
       }
       attempt++;
     }
 
+    this.emitDebug('fallback', { msg: 'LLM调用失败, 回退规则AI' });
     return candidates[0].cards;
+  }
+
+  private emitDebug(subType: string, data: any) {
+    if (this.onDebug) {
+      this.onDebug({ subType, seat: this.seat, ts: Date.now(), ...data });
+    }
   }
 
   buildPrompt(gameState: GameState, candidates: Candidate[], leadCards: Card[] | null): string {

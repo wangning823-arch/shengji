@@ -471,13 +471,33 @@ function handleBidPassResult(roomId: string, game: GameEngine, passResult: any):
       setTimeout(() => handleAIDealBid(roomId, game, game.currentSeat), 200);
     } else {
       const canBidNow = game.canBid(game.currentSeat);
-      if (!canBidNow) {
+      const canRebidNow = game.bids.length > 0 && game.canRebid(game.currentSeat);
+      if (!canBidNow && !canRebidNow) {
         clearDealTimeout(roomId);
         setTimeout(() => {
           if (game.status !== 'dealing' && game.status !== 'bidding') return;
           const nextPass = game.passBid(game.currentSeat);
           handleBidPassResult(roomId, game, nextPass);
         }, 100);
+      } else if (canRebidNow && !canBidNow) {
+        // 不能亮主但能反主，给玩家反主的机会
+        clearDealTimeout(roomId);
+        broadcast(roomId, {
+          type: 'turn_changed',
+          seat: game.currentSeat,
+          phase: game.status,
+          rebidPhase: true
+        });
+        broadcast(roomId, {
+          type: 'game_state',
+          state: game.toJSON()
+        });
+        const timeoutId = setTimeout(() => {
+          if (game.status !== 'dealing' && game.status !== 'bidding') return;
+          const nextPass = game.passBid(game.currentSeat);
+          handleBidPassResult(roomId, game, nextPass);
+        }, 10000);
+        dealTimeouts.set(roomId, timeoutId);
       } else {
         clearDealTimeout(roomId);
         const timeoutId = setTimeout(() => {
@@ -1225,7 +1245,9 @@ async function handleAITurn(roomId: string, game: GameEngine, seat: number): Pro
       const leadCards = game.currentTrick.length > 0 ? game.currentTrick[0].cards : null;
       const handIds = aiPlayer.hand.map(c => c.id);
       console.log(`[AI] Seat ${seat} playing, leadCards=${leadCards ? leadCards.length : 'null'}, trickLen=${game.currentTrick.length}, handSize=${aiPlayer.hand.length}, handIds=${handIds.join(',')}`);
+      broadcast(roomId, { type: 'ai_thinking', seat });
       let playCards = await aiPlayer.decidePlay(freshGameState, leadCards);
+      broadcast(roomId, { type: 'ai_thinking_done', seat });
       let cardIds = playCards.map(c => c.id);
       const inHand = cardIds.every(id => handIds.includes(id));
       console.log(`[AI] Seat ${seat} decided: ${cardIds.join(',')}, inHand=${inHand}`);
@@ -1554,10 +1576,17 @@ const messageHandlers: MessageHandlers = {
     if (!roomAIPlayers.has(ws.roomId)) {
       roomAIPlayers.set(ws.roomId, {});
     }
-    const roomAIs = roomAIPlayers.get(ws.roomId)!;
-    roomAIs[seat] = new LLMAIPlayer(seat, aiPlayerInfo, llmConfig);
+    const roomId = ws.roomId!;
+    const roomAIs = roomAIPlayers.get(roomId)!;
+    const aiPlayer = new LLMAIPlayer(seat, aiPlayerInfo, llmConfig);
+    console.log(`[AI] Created LLMAIPlayer seat=${seat}, useLLM=${aiPlayer.useLLM}, hasApiKey=${!!llmConfig.apiKey}`);
+    aiPlayer.onDebug = (msg) => {
+      console.log(`[LLM-DEBUG] Broadcasting to room ${roomId}: type=${msg.type} seat=${msg.seat}`);
+      broadcast(roomId, { type: 'llm_debug', ...msg });
+    };
+    roomAIs[seat] = aiPlayer;
 
-    broadcast(ws.roomId, { type: 'player_joined', seat, nickname: aiPlayerInfo.nickname, avatar: aiPlayerInfo.avatar, isAI: true });
+    broadcast(ws.roomId, { type: 'player_joined', seat, nickname: aiPlayerInfo.nickname, avatar: aiPlayer.avatar, isAI: true });
     broadcast(ws.roomId, { type: 'room_state', state: getRoomState(ws.roomId) });
   },
 

@@ -199,10 +199,15 @@ const App = {
 
     this.ws.onmessage = (e) => {
       try {
-        const msg = JSON.parse(e.data);
+        const data = typeof e.data === 'string' ? e.data : String(e.data);
+        const msg = JSON.parse(data);
+        if (msg.type === 'llm_debug') console.log('[WS-RECV llm_debug]', msg.subType, msg);
         this.handleMessage(msg);
       } catch (err) {
-        console.error('Invalid message', e.data);
+        console.error('Invalid message:', err, 'raw:', typeof e.data === 'string' ? e.data.substring(0, 300) : e.data);
+        try {
+          this.appendLLMDebug({ type: 'error', seat: -1, msg: '异常: ' + String(err).substring(0, 100) });
+        } catch (_) {}
       }
     };
 
@@ -224,6 +229,17 @@ const App = {
   bindEvents() {
     document.getElementById('btn-guest').onclick = () => this.loginGuest();
     document.getElementById('btn-wechat').onclick = () => alert('微信登录需要配置AppID');
+
+    // LLM 调试面板按钮
+    document.getElementById('llm-debug-toggle').onclick = () => {
+      const body = document.getElementById('llm-debug-body');
+      const btn = document.getElementById('llm-debug-toggle');
+      if (body.style.display === 'none') { body.style.display = ''; btn.textContent = '收起'; }
+      else { body.style.display = 'none'; btn.textContent = '展开'; }
+    };
+    document.getElementById('llm-debug-clear').onclick = () => {
+      document.getElementById('llm-debug-body').innerHTML = '';
+    };
 
     // 昵称输入回车登录
     document.getElementById('nickname-input').onkeydown = (e) => {
@@ -530,6 +546,19 @@ const App = {
           this.gameState.bids = msg.bids;
         }
         this.updateTurn(msg.seat, msg.phase, msg.rebidPhase);
+        break;
+
+      case 'ai_thinking':
+        this.showThinking(msg.seat, true);
+        break;
+
+      case 'ai_thinking_done':
+        this.showThinking(msg.seat, false);
+        break;
+
+      case 'llm_debug':
+        console.log('[LLM DEBUG]', msg.type, msg);
+        this.appendLLMDebug(msg);
         break;
 
       case 'rebid_phase':
@@ -935,6 +964,71 @@ const App = {
     if (rel === 0) return '我';
     const names = ['', '下家', '对家', '上家'];
     return names[rel];
+  },
+
+  showThinking(seat, thinking) {
+    const relSeat = this.getRelativeSeat(seat);
+    const el = document.querySelector(`.player[data-seat="${relSeat}"]`);
+    if (!el) return;
+    const nameEl = el.querySelector('.player-name');
+    if (!nameEl) return;
+    if (thinking) {
+      if (!nameEl.dataset.origName) {
+        nameEl.dataset.origName = nameEl.textContent;
+      }
+      nameEl.textContent = nameEl.dataset.origName + ' 思考中...';
+      el.classList.add('thinking');
+    } else {
+      if (nameEl.dataset.origName) {
+        nameEl.textContent = nameEl.dataset.origName;
+        delete nameEl.dataset.origName;
+      }
+      el.classList.remove('thinking');
+    }
+  },
+
+  appendLLMDebug(msg) {
+    const body = document.getElementById('llm-debug-body');
+    if (!body) return;
+    const subType = msg.subType || msg.type;
+    const typeColors = { request: '#4fc3f7', response: '#81c784', error: '#e57373', fallback: '#ffb74d', warn: '#ffa726', result: '#a5d6a7' };
+    const color = typeColors[subType] || '#ccc';
+    const seatNames = ['北', '东', '南', '西'];
+    const seatName = seatNames[msg.seat] || msg.seat;
+
+    let content = '';
+    if (subType === 'request') {
+      content = `<div class="llm-debug-line"><b>[${seatName}] 请求 LLM</b></div>`;
+      content += `<div class="llm-debug-line llm-debug-prompt">${this.escapeHtml(msg.prompt || '')}</div>`;
+      if (msg.candidates) {
+        content += `<div class="llm-debug-line">候选: ${msg.candidates.join(' | ')}</div>`;
+      }
+    } else if (subType === 'response') {
+      content = `<div class="llm-debug-line"><b>[${seatName}] LLM 返回 (${msg.elapsed})</b></div>`;
+      content += `<div class="llm-debug-line">原始: ${this.escapeHtml(msg.raw || '')}</div>`;
+      content += `<div class="llm-debug-line">选择: ${msg.selected || '无'} (第${msg.attempt}次)</div>`;
+    } else if (subType === 'result') {
+      content = `<div class="llm-debug-line" style="color:${color}">[${seatName}] 出牌: ${msg.cards}</div>`;
+    } else if (subType === 'error') {
+      content = `<div class="llm-debug-line" style="color:${color}">[${seatName}] 错误 (${msg.elapsed}): ${this.escapeHtml(msg.msg)}</div>`;
+    } else if (subType === 'fallback') {
+      content = `<div class="llm-debug-line" style="color:${color}">[${seatName}] ${msg.msg}</div>`;
+    } else if (subType === 'warn') {
+      content = `<div class="llm-debug-line" style="color:${color}">[${seatName}] ${msg.msg}</div>`;
+    } else {
+      content = `<div class="llm-debug-line" style="color:${color}">[${seatName}] [${subType}] ${msg.msg || JSON.stringify(msg).substring(0, 200)}</div>`;
+    }
+
+    const entry = document.createElement('div');
+    entry.className = 'llm-debug-entry';
+    entry.style.borderLeftColor = color;
+    entry.innerHTML = content;
+    body.appendChild(entry);
+    body.scrollTop = body.scrollHeight;
+  },
+
+  escapeHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   },
 
   renderHand() {

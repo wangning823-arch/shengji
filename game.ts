@@ -775,8 +775,9 @@ export class GameEngine {
       }
 
       const dealer = this.players[this.dealer];
-      // 如果无人亮主，直接把底牌给庄家并进入扣底阶段
-      // 如果有人亮过主，底牌由 confirmTrump() 分配（反主阶段可能换庄家）
+      // 无人亮主：直接把底牌给庄家并进入扣底阶段
+      // 有人亮主：必须保持 status 为 dealing/bidding，否则 passBid() 会因 status 不对而直接失败，
+      // 导致 confirm_trump 永远不会返回，反主阶段无法触发
       if (this.bids.length === 0) {
         dealer.hand.push(...this.bottomCards);
         this.status = 'taking_bottom';
