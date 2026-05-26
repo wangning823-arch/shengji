@@ -1271,13 +1271,8 @@ const App = {
     const trumpLevelStr = this.getRankFromLevel(this.gameState.trumpLevel);
     const existingBid = this.gameState.bids[this.gameState.bids.length - 1];
 
-    // 检查自己是否已经反过主（不能自己反自己的主）
+    // 不能反自己的主（当前最后一手是自己的就不能再反）
     if (existingBid.seat === this.seat) {
-      return false;
-    }
-
-    // 检查该玩家是否已经出过价（每人最多只能亮主/反主一次）
-    if (this.gameState.bids.some(b => b.seat === this.seat)) {
       return false;
     }
 
