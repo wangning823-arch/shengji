@@ -1,6 +1,6 @@
 {
   "name": "shengji",
-  "version": "1.0.0",
+  "version": "0.1.20260526.0642",
   "description": "打升级（拖拉机/80分）联机游戏",
   "main": "server.js",
   "scripts": {
